@@ -1,4 +1,3 @@
-// src/components/ui/SuccessOverlay.jsx
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { CheckCircle } from "lucide-react";
@@ -14,10 +13,16 @@ export function registerSuccessOverlayAPI() {
   };
 }
 
+/**
+ * Backdrop accesible
+ * - Se usa <button> para cumplir con accesibilidad (keyboard + screen readers)
+ */
 const Backdrop = ({ onClick }) => (
-  <div
+  <button
+    type="button"
+    aria-label="Cerrar mensaje de éxito"
     onClick={onClick}
-    className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-[9998]"
+    className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-[9998] cursor-default"
   />
 );
 
@@ -52,6 +57,7 @@ export default function SuccessOverlay() {
   return createPortal(
     <>
       <Backdrop onClick={() => setOpen(false)} />
+
       <div
         className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[9999]
                    w-[90%] max-w-[420px] px-6 py-7 rounded-2xl bg-white shadow-2xl
