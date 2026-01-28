@@ -358,10 +358,7 @@ const drawFooter = (pdf, pageNum, totalPages, pageWidth, pageHeight, margin) => 
 const buildPdfFromElement = async ({ el, waitForLogo }) => {
   await waitForLogo();
 
-  const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-    import("html2canvas"),
-    import("jspdf"),
-  ]);
+  const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import("html2canvas"), import("jspdf")]);
 
   const canvas = await html2canvas(el, {
     scale: 2,
@@ -397,12 +394,11 @@ const buildPdfFromElement = async ({ el, waitForLogo }) => {
 
 const buildPdfFilename = ({ startDate, ruta, poblacion }) => {
   const dForName = parseLocalDate(startDate);
-  const iso =
-    dForName
-      ? `${dForName.getFullYear()}-${String(dForName.getMonth() + 1).padStart(2, "0")}-${String(
-          dForName.getDate()
-        ).padStart(2, "0")}`
-      : "";
+  const iso = dForName
+    ? `${dForName.getFullYear()}-${String(dForName.getMonth() + 1).padStart(2, "0")}-${String(
+        dForName.getDate()
+      ).padStart(2, "0")}`
+    : "";
 
   const fname = `hoja-grupo_${ruta || ""}_${poblacion || ""}_${iso}.pdf`;
   return fname.replace(/\s+/g, "_");
@@ -571,10 +567,7 @@ export default function GroupSheet() {
 
   const groupLabel = useMemo(() => (grupo ? `GRUPO ${grupo}` : "GRUPO"), [grupo]);
 
-  const totalPagos = useMemo(
-    () => rows.reduce((acc, r) => acc + (Number(r?.pagoSemanal) || 0), 0),
-    [rows]
-  );
+  const totalPagos = useMemo(() => rows.reduce((acc, r) => acc + (Number(r?.pagoSemanal) || 0), 0), [rows]);
 
   return (
     <div className="p-6 max-w-[1280px] mx-auto">
@@ -683,11 +676,7 @@ export default function GroupSheet() {
 
       <div className="flex items-center justify-end mb-4">
         <div className="no-print flex gap-2">
-          <button
-            type="button"
-            onClick={handlePrint}
-            className="px-3 py-2 border rounded-md hover:bg-gray-50"
-          >
+          <button type="button" onClick={handlePrint} className="px-3 py-2 border rounded-md hover:bg-gray-50">
             Imprimir
           </button>
           <button
@@ -718,11 +707,7 @@ export default function GroupSheet() {
         dataLoading={dataLoading}
       />
 
-      <div
-        ref={printRef}
-        className="overflow-auto border rounded-lg sheet-wide"
-        style={{ borderColor: "#000" }}
-      >
+      <div ref={printRef} className="overflow-auto border rounded-lg sheet-wide" style={{ borderColor: "#000" }}>
         <div className="sheet-header header-v2">
           <div className="meta-card">
             <div className="meta-row">
@@ -760,8 +745,8 @@ export default function GroupSheet() {
       </div>
 
       <p className="text-xs mt-2" style={{ color: "#000" }}>
-        Filtros alineados a <b>Corte de Cobranza Diario</b>: primero elegir Población y
-        opcionalmente Ruta y Grupo. Semanas 1–15: pagos.
+        Filtros alineados a <b>Corte de Cobranza Diario</b>: primero elegir Población y opcionalmente Ruta y Grupo.
+        Semanas 1–15: pagos.
       </p>
     </div>
   );
@@ -862,7 +847,109 @@ function Filters({
   );
 }
 
+/* ==============================
+   Refactor Table (reduce nesting)
+============================== */
+function WeekHeaderCell({ w }) {
+  return (
+    <th className="gs-th gs-week-th border text-center">
+      <div className="wk-head">{w.label}</div>
+      <div className="wk-date">{w.date}</div>
+    </th>
+  );
+}
+
+function WeekEmptyCells({ count }) {
+  return Array.from({ length: count }).map((_, i) => (
+    <td key={i} className="gs-td gs-week-td border align-top">
+      <div className="week-box" />
+    </td>
+  ));
+}
+
+function GuaranteesList({ text }) {
+  if (!text) return null;
+  const items = text.split(" • ");
+  return (
+    <ul className="list-disc pl-4">
+      {items.map((g, i) => (
+        <li key={i} className="micro">
+          {g}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function DataRow({ r, weekCount }) {
+  return (
+    <tr className="row-pad">
+      <td className="gs-td border text-center align-top">
+        <div className="cell mini">{r.no}</div>
+      </td>
+      <td className="gs-td border align-top">
+        <div className="cell micro">{r.loanId}</div>
+      </td>
+      <td className="gs-td border align-top">
+        <div className="cell">
+          <div className="font-medium mini">{r.cliente}</div>
+        </div>
+      </td>
+      <td className="gs-td border align-top whitespace-pre-line">
+        <div className="cell micro">{r.domicilio}</div>
+      </td>
+      <td className="gs-td border align-top">
+        <div className="cell mini">{r.aval}</div>
+      </td>
+      <td className="gs-td border align-top whitespace-pre-line">
+        <div className="cell micro">{r.domicilioAval}</div>
+      </td>
+      <td className="gs-td border align-top">
+        <div className="cell mini">
+          <GuaranteesList text={r.garantias} />
+        </div>
+      </td>
+      <td className="gs-td border text-right align-top">
+        <div className="cell mini">${r.prestamo.toLocaleString("es-MX")}</div>
+      </td>
+      <td className="gs-td border text-right align-top">
+        <div className="cell mini">${r.pagoSemanal.toLocaleString("es-MX")}</div>
+      </td>
+
+      <WeekEmptyCells count={weekCount} />
+    </tr>
+  );
+}
+
+function renderTableBody({ loading, dataLoading, rows, weekCount }) {
+  const colSpan = 9 + weekCount;
+
+  if (loading || dataLoading) {
+    return (
+      <tr>
+        <td className="p-3 border text-center" colSpan={colSpan}>
+          Cargando…
+        </td>
+      </tr>
+    );
+  }
+
+  if (!rows.length) {
+    return (
+      <tr>
+        <td className="p-3 border text-center" colSpan={colSpan}>
+          Sin datos
+        </td>
+      </tr>
+    );
+  }
+
+  return rows.map((r) => <DataRow key={r.key} r={r} weekCount={weekCount} />);
+}
+
 function Table({ loading, dataLoading, rows, weekHeaders }) {
+  const weekCount = weekHeaders.length;
+
   return (
     <table className="gs-table w-full text-sm border" style={{ borderColor: "#000" }}>
       <colgroup>
@@ -891,86 +978,14 @@ function Table({ loading, dataLoading, rows, weekHeaders }) {
           <th className="gs-th border mini">Garantías</th>
           <th className="gs-th border mini">Prest</th>
           <th className="gs-th border mini">Pagos</th>
+
           {weekHeaders.map((w) => (
-            <th key={w.index} className="gs-th gs-week-th border text-center">
-              <div className="wk-head">{w.label}</div>
-              <div className="wk-date">{w.date}</div>
-            </th>
+            <WeekHeaderCell key={w.index} w={w} />
           ))}
         </tr>
       </thead>
 
-      <tbody>
-        {(loading || dataLoading) && (
-          <tr>
-            <td className="p-3 border text-center" colSpan={9 + weekHeaders.length}>
-              Cargando…
-            </td>
-          </tr>
-        )}
-
-        {!loading && !dataLoading && rows.length === 0 && (
-          <tr>
-            <td className="p-3 border text-center" colSpan={9 + weekHeaders.length}>
-              Sin datos
-            </td>
-          </tr>
-        )}
-
-        {!loading &&
-          !dataLoading &&
-          rows.map((r) => (
-            <tr key={r.key} className="row-pad">
-              <td className="gs-td border text-center align-top">
-                <div className="cell mini">{r.no}</div>
-              </td>
-              <td className="gs-td border align-top">
-                <div className="cell micro">{r.loanId}</div>
-              </td>
-              <td className="gs-td border align-top">
-                <div className="cell">
-                  <div className="font-medium mini">{r.cliente}</div>
-                </div>
-              </td>
-              <td className="gs-td border align-top whitespace-pre-line">
-                <div className="cell micro">{r.domicilio}</div>
-              </td>
-              <td className="gs-td border align-top">
-                <div className="cell mini">{r.aval}</div>
-              </td>
-              <td className="gs-td border align-top whitespace-pre-line">
-                <div className="cell micro">{r.domicilioAval}</div>
-              </td>
-              <td className="gs-td border align-top">
-                <div className="cell mini">
-                  {r.garantias ? (
-                    <ul className="list-disc pl-4">
-                      {r.garantias.split(" • ").map((g, i) => (
-                        <li key={i} className="micro">
-                          {g}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    ""
-                  )}
-                </div>
-              </td>
-              <td className="gs-td border text-right align-top">
-                <div className="cell mini">${r.prestamo.toLocaleString("es-MX")}</div>
-              </td>
-              <td className="gs-td border text-right align-top">
-                <div className="cell mini">${r.pagoSemanal.toLocaleString("es-MX")}</div>
-              </td>
-
-              {weekHeaders.map((_, i) => (
-                <td key={i} className="gs-td gs-week-td border align-top">
-                  <div className="week-box" />
-                </td>
-              ))}
-            </tr>
-          ))}
-      </tbody>
+      <tbody>{renderTableBody({ loading, dataLoading, rows, weekCount })}</tbody>
     </table>
   );
 }
