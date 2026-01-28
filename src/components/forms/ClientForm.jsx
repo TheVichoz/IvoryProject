@@ -85,7 +85,8 @@ async function compressImage(
       resolve(canvas.toDataURL(type, quality));
     } else {
       const c2 = document.createElement('canvas');
-      c2.width = w; c2.height = h;
+      c2.width = w;
+      c2.height = h;
       c2.getContext('2d').drawImage(bitmap, 0, 0, w, h);
       resolve(c2.toDataURL(type, quality));
     }
@@ -128,23 +129,155 @@ async function removeFromBucket(publicUrl, bucket = 'client_photos') {
 }
 
 /* ============================
+   Helpers de validación
+============================ */
+const onlyDigits = (s) => String(s || '').replace(/\D/g, '');
+
+const validateClientBasics = (formData) => {
+  const phoneDigits = onlyDigits(formData.phone);
+  if (formData.phone && phoneDigits.length !== 10) {
+    return { ok: false, title: 'Teléfono inválido', description: 'El teléfono debe tener 10 dígitos.' };
+  }
+  if (formData.numero_ine && String(formData.numero_ine).trim().length < 13) {
+    return { ok: false, title: 'INE inválido', description: 'El número de INE debe tener al menos 13 caracteres.' };
+  }
+  return { ok: true };
+};
+
+const getAuthUserId = async () => {
+  const { data } = await supabase.auth.getSession();
+  return data?.session?.user?.id || null;
+};
+
+const checkAvalIneConflict = async ({ ineAval, currentClientId }) => {
+  const { data, error } = await supabase
+    .from('avales')
+    .select('id, client_id, nombre, clients!inner(status)')
+    .eq('numero_ine', ineAval)
+    .eq('clients.status', 'active')
+    .neq('client_id', currentClientId ?? -1)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    return { ok: false, error };
+  }
+
+  if (data) {
+    return {
+      ok: false,
+      conflict: data,
+    };
+  }
+
+  return { ok: true };
+};
+
+const buildClientPayload = (formData, fotoUrlFinal) => ({
+  name: formData.name,
+  email: formData.email || null,
+  phone: formData.phone,
+  address: formData.address,
+  poblacion: formData.poblacion.trim(),
+  numero_ine: formData.numero_ine,
+  ruta: formData.ruta,
+  grupo: formData.grupo.trim(),
+  maps_url: formData.maps_url.trim() || null,
+  fecha_visita: toISODate(formData.fecha_visita),
+  foto_url: fotoUrlFinal,
+});
+
+const hasAnyAvalInfo = (avalData) =>
+  Boolean(
+    avalData.nombre?.trim() ||
+      avalData.numero_ine?.trim() ||
+      avalData.phone?.trim() ||
+      avalData.address?.trim() ||
+      avalData.email?.trim()
+  );
+
+const buildAvalPayload = (avalData, clientId) => ({
+  client_id: clientId,
+  nombre: avalData.nombre?.trim() || null,
+  numero_ine: avalData.numero_ine?.trim() || null,
+  telefono: avalData.phone?.trim() || null,
+  direccion: avalData.address?.trim() || null,
+  email: avalData.email?.trim() || null,
+});
+
+const upsertAval = async ({ avalData, clientId }) => {
+  if (!clientId) return { ok: true };
+  if (!hasAnyAvalInfo(avalData)) return { ok: true };
+
+  const payloadAval = buildAvalPayload(avalData, clientId);
+
+  if (avalData.id) {
+    const { error } = await supabase.from('avales').update(payloadAval).eq('id', avalData.id);
+    return error ? { ok: false, error } : { ok: true };
+  }
+
+  const createdBy = await getAuthUserId();
+  const { error } = await supabase.from('avales').insert({ ...payloadAval, created_by: createdBy });
+  return error ? { ok: false, error } : { ok: true };
+};
+
+const resolvePhotoUrl = async ({ formFotoUrl, newPhotoFile, client }) => {
+  // Mantener por defecto lo que trae el form (preview o url existente)
+  let fotoUrlFinal = formFotoUrl || null;
+
+  // Caso A: el usuario quitó la foto en UI
+  const userClearedPhoto = !formFotoUrl && client?.foto_url;
+  if (userClearedPhoto) {
+    try {
+      await removeFromBucket(client.foto_url);
+    } catch (err) {
+      console.warn('No se pudo eliminar la foto anterior del bucket:', err);
+    }
+    fotoUrlFinal = null;
+  }
+
+  // Caso B: el usuario seleccionó una nueva foto
+  if (newPhotoFile) {
+    const uploadedUrl = await uploadToBucket(newPhotoFile, 'client_photos');
+
+    if (client?.foto_url) {
+      try {
+        await removeFromBucket(client.foto_url, 'client_photos');
+      } catch (err) {
+        console.warn('No se pudo eliminar la foto anterior del bucket:', err);
+      }
+    }
+
+    fotoUrlFinal = uploadedUrl;
+  }
+
+  return fotoUrlFinal;
+};
+
+/* ============================
    Picker de foto (inline)
 ============================ */
 const PhotoPicker = ({ valueUrl, onChange, onClear, disabled }) => {
   const inputRef = useRef(null);
 
+  const resetInput = () => {
+    if (inputRef.current) inputRef.current.value = '';
+  };
+
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
     if (file.size > 12 * 1024 * 1024) {
       toast({
         variant: 'destructive',
         title: 'Archivo demasiado grande',
         description: 'Máximo 12MB.'
       });
-      inputRef.current && (inputRef.current.value = '');
+      resetInput();
       return;
     }
+
     try {
       const { file: compressed, dataUrl } = await compressImage(file);
       onChange?.({ file: compressed, previewUrl: dataUrl });
@@ -156,7 +289,7 @@ const PhotoPicker = ({ valueUrl, onChange, onClear, disabled }) => {
         description: 'No se pudo procesar la foto.'
       });
     } finally {
-      inputRef.current && (inputRef.current.value = '');
+      resetInput();
     }
   };
 
@@ -221,11 +354,10 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
     grupo: '',
     maps_url: '',
     fecha_visita: '',
-    // NUEVO: foto actual (public URL)
     foto_url: '',
   });
 
-  // NUEVO: archivo nuevo (comprimido) y preview al editar
+  // archivo nuevo (comprimido) y preview al editar
   const [newPhotoFile, setNewPhotoFile] = useState(null);
 
   // ---------------------------
@@ -235,9 +367,9 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
     id: null,
     nombre: '',
     numero_ine: '',
-    phone: '',        // se mapea a columna "telefono"
-    address: '',      // se mapea a columna "direccion"
-    email: ''         // columna "email"
+    phone: '',
+    address: '',
+    email: ''
   });
 
   const [loadingAval, setLoadingAval] = useState(false);
@@ -257,25 +389,26 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
         grupo: client.grupo || '',
         maps_url: client.maps_url || '',
         fecha_visita: toISODate(client.fecha_visita),
-        foto_url: client.foto_url || '', // 👈 foto actual (si existe)
+        foto_url: client.foto_url || '',
       });
       setNewPhotoFile(null);
-    } else {
-      setFormData({
-        name: '',
-        email: '',
-        phone: '',
-        address: '',
-        poblacion: '',
-        numero_ine: '',
-        ruta: '',
-        grupo: '',
-        maps_url: '',
-        fecha_visita: toISODate(new Date()),
-        foto_url: '',
-      });
-      setNewPhotoFile(null);
+      return;
     }
+
+    setFormData({
+      name: '',
+      email: '',
+      phone: '',
+      address: '',
+      poblacion: '',
+      numero_ine: '',
+      ruta: '',
+      grupo: '',
+      maps_url: '',
+      fecha_visita: toISODate(new Date()),
+      foto_url: '',
+    });
+    setNewPhotoFile(null);
   }, [client]);
 
   // Si es edición, cargar el aval ligado al client.id
@@ -285,6 +418,7 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
         setAvalData({ id: null, nombre: '', numero_ine: '', phone: '', address: '', email: '' });
         return;
       }
+
       setLoadingAval(true);
       const { data, error } = await supabase
         .from('avales')
@@ -309,6 +443,7 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
       } else {
         setAvalData({ id: null, nombre: '', numero_ine: '', phone: '', address: '', email: '' });
       }
+
       setLoadingAval(false);
     };
 
@@ -336,158 +471,84 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
     }
   }, [formData.maps_url]);
 
+  const runAvalIneValidation = async () => {
+    const ineAval = (avalData.numero_ine || '').trim();
+    if (!ineAval) return { ok: true };
+
+    const res = await checkAvalIneConflict({
+      ineAval,
+      currentClientId: client?.id,
+    });
+
+    if (!res.ok && res.error) {
+      console.error('Error validando INE de aval:', res.error);
+      toast({
+        variant: 'destructive',
+        title: 'Error al validar aval',
+        description: 'No se pudo validar el INE del aval.',
+      });
+      return { ok: false };
+    }
+
+    if (!res.ok && res.conflict) {
+      toast({
+        variant: 'destructive',
+        title: 'INE de aval en uso',
+        description: `Ese INE ya está asignado como aval del cliente #${res.conflict.client_id} (ACTIVO).`,
+      });
+      return { ok: false };
+    }
+
+    return { ok: true };
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (submitting) return;
 
-    // Validaciones mínimas (cliente)
-    if (formData.phone && formData.phone.replace(/\D/g, '').length !== 10) {
-      toast({ variant: 'destructive', title: 'Teléfono inválido', description: 'El teléfono debe tener 10 dígitos.' });
-      return;
-    }
-    if (formData.numero_ine && String(formData.numero_ine).trim().length < 13) {
-      toast({ variant: 'destructive', title: 'INE inválido', description: 'El número de INE debe tener al menos 13 caracteres.' });
+    const basic = validateClientBasics(formData);
+    if (!basic.ok) {
+      toast({ variant: 'destructive', title: basic.title, description: basic.description });
       return;
     }
 
-    // Validación de INE del AVAL (no duplicado en otro cliente ACTIVO)
-    const ineAval = (avalData.numero_ine || '').trim();
-    if (ineAval) {
-      setSubmitting(true);
-      const { data: avalConConflicto, error: errAvalDup } = await supabase
-        .from('avales')
-        .select('id, client_id, nombre, clients!inner(status)')
-        .eq('numero_ine', ineAval)
-        .eq('clients.status', 'active')
-        .neq('client_id', client?.id ?? -1)
-        .limit(1)
-        .maybeSingle();
-
-      if (errAvalDup) {
-        setSubmitting(false);
-        console.error('Error validando INE de aval:', errAvalDup);
-        toast({ variant: 'destructive', title: 'Error al validar aval', description: 'No se pudo validar el INE del aval.' });
-        return;
-      }
-
-      if (avalConConflicto) {
-        setSubmitting(false);
-        toast({
-          variant: 'destructive',
-          title: 'INE de aval en uso',
-          description: `Ese INE ya está asignado como aval del cliente #${avalConConflicto.client_id} (ACTIVO).`,
-        });
-        return;
-      }
-    }
-
+    setSubmitting(true);
     try {
-      setSubmitting(true);
+      // Validación INE del aval (no duplicado en otro cliente ACTIVO)
+      const avalOk = await runAvalIneValidation();
+      if (!avalOk.ok) return;
 
-      // === 1) Manejo de foto (añadir/reemplazar/eliminar) ===
-      let newFotoUrl = formData.foto_url || null;
-
-      // Caso A: el usuario quitó la foto en UI (botón "Quitar")
-      const userClearedPhoto = !formData.foto_url && client?.foto_url;
-      if (userClearedPhoto) {
-        // Eliminar del bucket la anterior
-        try {
-          await removeFromBucket(client.foto_url);
-        } catch (err) {
-          console.warn('No se pudo eliminar la foto anterior del bucket:', err);
-        }
-        newFotoUrl = null;
-      }
-
-      // Caso B: el usuario seleccionó una nueva foto
-      if (newPhotoFile) {
-        // Subir nueva
-        const uploadedUrl = await uploadToBucket(newPhotoFile, 'client_photos');
-        // Borrar anterior si existía y es distinta
-        if (client?.foto_url) {
-          try {
-            await removeFromBucket(client.foto_url, 'client_photos');
-          } catch (err) {
-            console.warn('No se pudo eliminar la foto anterior del bucket:', err);
-          }
-        }
-        newFotoUrl = uploadedUrl;
-      }
-
-      // === 2) Guardar cliente (tu flujo actual) ===
-      // IMPORTANTE: pasamos foto_url; tu onSubmit debería persistirlo.
-      await onSubmit({
-        name: formData.name,
-        email: formData.email || null,
-        phone: formData.phone,
-        address: formData.address,
-        poblacion: formData.poblacion.trim(),
-        numero_ine: formData.numero_ine,
-        ruta: formData.ruta,
-        grupo: formData.grupo.trim(),
-        maps_url: formData.maps_url.trim() || null,
-        fecha_visita: toISODate(formData.fecha_visita),
-        foto_url: newFotoUrl, // 👈 NUEVO
+      // 1) Foto
+      const fotoUrlFinal = await resolvePhotoUrl({
+        formFotoUrl: formData.foto_url,
+        newPhotoFile,
+        client,
       });
 
-      /* 
+      // 2) Cliente (tu flujo actual)
+      await onSubmit(buildClientPayload(formData, fotoUrlFinal));
+
+      /*
       // Si tu onSubmit NO guarda foto_url, descomenta este "Plan B":
       if (client?.id) {
-        await supabase.from('clients').update({ foto_url: newFotoUrl }).eq('id', client.id);
+        await supabase.from('clients').update({ foto_url: fotoUrlFinal }).eq('id', client.id);
       }
       */
 
-      // === 3) Upsert del aval (con RLS fix) ===
+      // 3) Upsert aval
       if (client?.id) {
-        const anyAvalInfo =
-          avalData.nombre?.trim() ||
-          avalData.numero_ine?.trim() ||
-          avalData.phone?.trim() ||
-          avalData.address?.trim() ||
-          avalData.email?.trim();
-
-        if (anyAvalInfo) {
-          // 🔐 Necesitamos created_by = auth.uid() para INSERT por políticas RLS
-          const { data: authData } = await supabase.auth.getSession();
-          const createdBy = authData?.session?.user?.id || null;
-
-          const payloadAval = {
-            client_id: client.id,
-            nombre: avalData.nombre?.trim() || null,
-            numero_ine: avalData.numero_ine?.trim() || null,
-            telefono: avalData.phone?.trim() || null,
-            direccion: avalData.address?.trim() || null,
-            email: avalData.email?.trim() || null,
-          };
-
-          if (avalData.id) {
-            // UPDATE (no tocamos created_by para evitar choques con RLS)
-            const { error: upErr } = await supabase
-              .from('avales')
-              .update(payloadAval)
-              .eq('id', avalData.id);
-
-            if (upErr) {
-              console.error('Error actualizando aval:', upErr);
-              toast({ variant: 'destructive', title: 'No se pudo actualizar el aval', description: 'Intenta nuevamente.' });
-              return;
-            }
-          } else {
-            // INSERT con created_by obligatorio
-            const { error: insErr } = await supabase
-              .from('avales')
-              .insert({ ...payloadAval, created_by: createdBy });
-
-            if (insErr) {
-              console.error('Error insertando aval:', insErr);
-              toast({ variant: 'destructive', title: 'No se pudo crear el aval', description: 'Intenta nuevamente.' });
-              return;
-            }
-          }
+        const avalRes = await upsertAval({ avalData, clientId: client.id });
+        if (!avalRes.ok) {
+          console.error('Error guardando aval:', avalRes.error);
+          toast({ variant: 'destructive', title: 'No se pudo guardar el aval', description: 'Intenta nuevamente.' });
+          return;
         }
       }
 
-      toast({ title: client ? 'Cambios guardados' : 'Cliente creado', description: 'La ficha se actualizó correctamente.' });
+      toast({
+        title: client ? 'Cambios guardados' : 'Cliente creado',
+        description: 'La ficha se actualizó correctamente.',
+      });
       onCancel?.();
     } catch (err) {
       console.error(err);
@@ -511,13 +572,13 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
       </DialogHeader>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 py-4 max-h-[65vh] overflow-y-auto pr-1">
-        {/* -------- Foto del cliente (nuevo bloque) -------- */}
+        {/* -------- Foto del cliente -------- */}
         <div className="md:col-span-2">
           <PhotoPicker
             valueUrl={formData.foto_url}
             onChange={({ file, previewUrl }) => {
-              setNewPhotoFile(file); // archivo comprimido (webp)
-              setFormData((p) => ({ ...p, foto_url: previewUrl })); // preview inmediata
+              setNewPhotoFile(file);
+              setFormData((p) => ({ ...p, foto_url: previewUrl }));
             }}
             onClear={() => {
               setNewPhotoFile(null);
