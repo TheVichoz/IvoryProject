@@ -71,7 +71,65 @@ const firstFreeWeekFrom = (paidWeeksSet, maxWeeks) => {
   }
   return null;
 };
-/* ================================================= */
+
+/* ======= Helpers para reducir complejidad (Sonar) ======= */
+const toastRequiredLoan = () =>
+  toast({
+    variant: 'destructive',
+    title: 'Campos requeridos',
+    description: 'Selecciona un préstamo.',
+  });
+
+const toastLiquidated = () =>
+  toast({
+    variant: 'destructive',
+    title: 'Préstamo liquidado',
+    description: 'Este préstamo ya está liquidado y no admite más pagos.',
+  });
+
+const toastRequiredFields = () =>
+  toast({
+    variant: 'destructive',
+    title: 'Campos requeridos',
+    description: 'Por favor, completa todos los campos obligatorios.',
+  });
+
+const toastInvalidAmount = () =>
+  toast({
+    variant: 'destructive',
+    title: 'Monto inválido',
+    description: 'El monto debe ser mayor a 0.',
+  });
+
+const toastNoWeeks = () =>
+  toast({
+    variant: 'destructive',
+    title: 'No hay semanas disponibles',
+    description: 'Este préstamo ya tiene todas las semanas registradas.',
+  });
+
+const toastWeekOccupied = (week) =>
+  toast({
+    variant: 'destructive',
+    title: 'Semana ocupada',
+    description: `La semana ${week} ya tiene un registro para este préstamo.`,
+  });
+
+const isPromiseLike = (x) => x && typeof x.then === 'function';
+
+const computeWeekToSave = ({ payment, firstFreeWeek }) => {
+  // en edición conserva week original, en alta usa la primera libre
+  return payment?.week ?? firstFreeWeek;
+};
+
+const shouldBlockNewPaymentByWeek = ({ payment, weekToSave, occupiedWeeks }) => {
+  // solo aplica para nuevos pagos
+  if (payment?.week) return { block: false };
+  if (weekToSave == null) return { block: true, reason: 'no_weeks' };
+  if (occupiedWeeks.has(weekToSave)) return { block: true, reason: 'occupied' };
+  return { block: false };
+};
+/* ======================================================= */
 
 const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMessage }) => {
   const [formData, setFormData] = useState({
@@ -147,47 +205,48 @@ const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMess
         payment_date: payment.payment_date ? toYmdLocal(payment.payment_date) : toYmdLocal(new Date()),
         status: payment.status || 'paid',
       });
-    } else {
-      setFormData({
-        loan_id: '',
-        client_name: '',
-        amount: '',
-        payment_date: toYmdLocal(new Date()),
-        status: 'paid',
-      });
+      return;
     }
+
+    setFormData({
+      loan_id: '',
+      client_name: '',
+      amount: '',
+      payment_date: toYmdLocal(new Date()),
+      status: 'paid',
+    });
   }, [payment]);
 
-  // Cuando seleccionamos préstamo, sugerimos monto y fecha (next_payment_date si existe)
   const handleSelectChange = (name, value) => {
     let updated = { ...formData, [name]: value };
 
-    if (name === 'loan_id') {
-      const loan = loans.find((l) => l.id === parseInt(value, 10));
-      if (loan) {
-        const rb = computeInitialRemaining(loan);
-        const inactive = (loan.status || '').toLowerCase() !== 'active';
-        const done = rb <= 0 || inactive || paidWeeks.size >= getTermWeeks(loan);
-
-        updated.client_name = loan.client_name || '';
-        updated.amount = done ? '' : (loan.weekly_payment ?? '');
-
-        // sugerimos fecha usando LOCAL YMD (coherente con LoanDetails)
-        updated.payment_date = loan.next_payment_date
-          ? toYmdLocal(loan.next_payment_date)
-          : toYmdLocal(new Date());
-      } else {
-        updated.client_name = '';
-        updated.amount = '';
-        updated.payment_date = toYmdLocal(new Date());
-      }
+    if (name !== 'loan_id') {
+      if (name === 'status') updated.status = value;
+      setFormData(updated);
+      return;
     }
 
-    if (name === 'status') {
-      updated.status = value;
+    const loan = loans.find((l) => l.id === parseInt(value, 10));
+    if (!loan) {
+      setFormData({
+        ...updated,
+        client_name: '',
+        amount: '',
+        payment_date: toYmdLocal(new Date()),
+      });
+      return;
     }
 
-    setFormData(updated);
+    const rb = computeInitialRemaining(loan);
+    const inactive = (loan.status || '').toLowerCase() !== 'active';
+    const done = rb <= 0 || inactive || paidWeeks.size >= getTermWeeks(loan);
+
+    setFormData({
+      ...updated,
+      client_name: loan.client_name || '',
+      amount: done ? '' : (loan.weekly_payment ?? ''),
+      payment_date: loan.next_payment_date ? toYmdLocal(loan.next_payment_date) : toYmdLocal(new Date()),
+    });
   };
 
   const handleChange = (e) => {
@@ -203,99 +262,82 @@ const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMess
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-
+  const validateBeforeSubmit = () => {
     if (!formData.loan_id) {
-      toast({
-        variant: 'destructive',
-        title: 'Campos requeridos',
-        description: 'Selecciona un préstamo.',
-      });
-      return;
+      toastRequiredLoan();
+      return { ok: false };
     }
 
-    // Bloqueo duro si ya está liquidado
     if (isLiquidated) {
-      toast({
-        variant: 'destructive',
-        title: 'Préstamo liquidado',
-        description: 'Este préstamo ya está liquidado y no admite más pagos.',
-      });
-      return;
+      toastLiquidated();
+      return { ok: false };
     }
 
     if (formData.amount === '' || formData.amount === null) {
-      toast({
-        variant: 'destructive',
-        title: 'Campos requeridos',
-        description: 'Por favor, completa todos los campos obligatorios.',
-      });
-      return;
+      toastRequiredFields();
+      return { ok: false };
     }
 
     const payAmount = toNumber(formData.amount);
     if (payAmount <= 0) {
-      toast({
-        variant: 'destructive',
-        title: 'Monto inválido',
-        description: 'El monto debe ser mayor a 0.',
-      });
+      toastInvalidAmount();
+      return { ok: false };
+    }
+
+    return { ok: true, payAmount };
+  };
+
+  const buildPayload = ({ payAmount, weekToSave }) => ({
+    loan_id: parseInt(formData.loan_id, 10),
+    client_name: formData.client_name || null, // quítala si tu tabla no la tiene
+    amount: payAmount,
+    payment_date: formData.payment_date, // YYYY-MM-DD (local)
+    status: formData.status,
+    week: weekToSave,
+  });
+
+  const tryShowSuccessOverlay = (meta) => {
+    if (typeof window === 'undefined') return;
+    if (typeof window.showSuccess !== 'function') return;
+
+    const msg =
+      successMessage ||
+      (meta.isEdit ? 'Pago actualizado' : 'Pago registrado');
+
+    window.showSuccess(msg);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    const validation = validateBeforeSubmit();
+    if (!validation.ok) return;
+
+    const weekToSave = computeWeekToSave({ payment, firstFreeWeek });
+
+    const weekCheck = shouldBlockNewPaymentByWeek({
+      payment,
+      weekToSave,
+      occupiedWeeks,
+    });
+
+    if (weekCheck.block) {
+      if (weekCheck.reason === 'no_weeks') toastNoWeeks();
+      if (weekCheck.reason === 'occupied') toastWeekOccupied(weekToSave);
       return;
     }
 
-    // Semana a guardar (oculta en la UI), dinámica con termWeeks real
-    const weekToSave = payment?.week ?? firstFreeWeek;
-
-    // Si es nuevo y ya no quedan semanas libres, bloquear
-    if (!payment?.week && weekToSave == null) {
-      toast({
-        variant: 'destructive',
-        title: 'No hay semanas disponibles',
-        description: 'Este préstamo ya tiene todas las semanas registradas.',
-      });
-      return;
-    }
-
-    // Protección extra: no permitir semana ocupada si es nuevo
-    if (!payment?.week && occupiedWeeks.has(weekToSave)) {
-      toast({
-        variant: 'destructive',
-        title: 'Semana ocupada',
-        description: `La semana ${weekToSave} ya tiene un registro para este préstamo.`,
-      });
-      return;
-    }
-
-    // Payload SOLO con columnas reales de 'payments'
-    const payload = {
-      loan_id: parseInt(formData.loan_id, 10),
-      client_name: formData.client_name || null, // quítala si tu tabla no la tiene
-      amount: payAmount,
-      payment_date: formData.payment_date,       // YYYY-MM-DD (local)
-      status: formData.status,
-      week: weekToSave,
-    };
-
+    const payload = buildPayload({ payAmount: validation.payAmount, weekToSave });
     const meta = { isEdit: !!payment?.id, id: payment?.id ?? null };
 
-    // Llamamos al padre. Si devuelve una Promesa y se resuelve, mostramos overlay.
     try {
       const result = onSubmit(payload, meta);
+      if (!isPromiseLike(result)) return;
 
-      // Solo mostrar overlay si onSubmit es async y fue exitoso.
-      if (result && typeof result.then === 'function') {
-        const ok = await result;
-        if (ok !== false && typeof window !== 'undefined' && typeof window.showSuccess === 'function') {
-          const msg =
-            successMessage ||
-            (meta.isEdit ? 'Pago actualizado' : 'Pago registrado');
-          window.showSuccess(msg);
-        }
-      }
+      const ok = await result;
+      if (ok !== false) tryShowSuccessOverlay(meta);
     } catch (err) {
-      // Los errores ya deberían manejarse con toast en el padre;
-      // aquí evitamos overlay en fallos.
+      // el padre debería manejar el toast; aquí solo evitamos overlay
     }
   };
 
@@ -400,7 +442,7 @@ const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMess
             className="w-full"
             inputMode="decimal"
             min="0"
-            step="any"           // permite decimales
+            step="any"
           />
         </div>
 
