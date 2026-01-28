@@ -14,6 +14,7 @@ const num = (v) => {
   const n = Number(String(v).replace(/[^\d.-]/g, ''));
   return Number.isFinite(n) ? n : 0;
 };
+
 const money = (v) =>
   num(v).toLocaleString('es-MX', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
@@ -39,51 +40,83 @@ const toDateInput = (v) => {
 
 const getStatusInfo = (status) => {
   switch ((status || '').toLowerCase()) {
-    case 'active': return { text: 'Activo', color: 'bg-green-100 text-green-800' };
-    case 'completed': return { text: 'Completado', color: 'bg-blue-100 text-blue-800' };
-    case 'overdue': return { text: 'Vencido', color: 'bg-red-100 text-red-800' };
-    default: return { text: 'Desconocido', color: 'bg-gray-100 text-gray-800' };
+    case 'active':
+      return { text: 'Activo', color: 'bg-green-100 text-green-800' };
+    case 'completed':
+      return { text: 'Completado', color: 'bg-blue-100 text-blue-800' };
+    case 'overdue':
+      return { text: 'Vencido', color: 'bg-red-100 text-red-800' };
+    default:
+      return { text: 'Desconocido', color: 'bg-gray-100 text-gray-800' };
   }
 };
 // --------------------------------
 
 const LoanDetails = ({ loan }) => {
   const { refreshData } = useData();
-  if (!loan) return null;
 
-  const statusInfo = getStatusInfo(loan.status);
+  // ✅ Hooks siempre arriba (aunque loan venga null al principio)
+  const [liveClientName, setLiveClientName] = useState(null);
+  const [newStart, setNewStart] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // Memo del ISO inicial (si no hay loan, queda '')
+  const initialStartISO = useMemo(() => {
+    if (!loan) return '';
+    return toDateInput(loan.start_date ?? loan.startDate ?? loan.date);
+  }, [loan?.start_date, loan?.startDate, loan?.date, loan]);
+
+  // Mantener el input sincronizado cuando cambie el préstamo
+  useEffect(() => {
+    setNewStart(initialStartISO);
+  }, [initialStartISO]);
 
   // 🔹 Nombre vivo del cliente (prioriza tabla clients)
-  const [liveClientName, setLiveClientName] = useState(null);
-
   useEffect(() => {
     let cancelled = false;
+
     const fetchName = async () => {
+      if (!loan) {
+        setLiveClientName(null);
+        return;
+      }
+
       const cid = loan?.client_id ?? loan?.clientId ?? loan?.cliente_id;
       if (!cid) {
         setLiveClientName(null);
         return;
       }
+
       const { data, error } = await supabase
         .from('clients')
         .select('name')
         .eq('id', cid)
         .single();
+
       if (!cancelled) {
         if (!error && data?.name) setLiveClientName(data.name);
         else setLiveClientName(null);
       }
     };
+
     fetchName();
-    return () => { cancelled = true; };
-  }, [loan?.client_id, loan?.clientId, loan?.cliente_id]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loan?.client_id, loan?.clientId, loan?.cliente_id, loan]);
+
+  // ✅ Ahora sí: si no hay loan, ya podemos cortar render sin romper hooks
+  if (!loan) return null;
+
+  const statusInfo = getStatusInfo(loan.status);
 
   // 🔹 Si existe nombre vivo, úsalo; si no, usa el que venga en loan
   const displayClientName = liveClientName ?? loan.client_name ?? '—';
 
   // Reglas por defecto
   const interestRate = num(loan.interest_rate ?? 40);
-  const termWeeks   = num(loan.term_weeks ?? loan.term ?? loan.weeks ?? 14);
+  const termWeeks = num(loan.term_weeks ?? loan.term ?? loan.weeks ?? 14);
 
   // Total del ciclo (lo que debe pagar en total)
   const totalCycle =
@@ -94,6 +127,7 @@ const LoanDetails = ({ loan }) => {
   // Neto entregado (lo que recibió en mano)
   const inferredNet =
     interestRate >= 0 ? Math.round(totalCycle / (1 + interestRate / 100)) : totalCycle;
+
   const netDisbursed = num(
     loan.net_disbursed ?? loan.monto_entregado ?? loan.entregado ?? inferredNet
   );
@@ -126,35 +160,31 @@ const LoanDetails = ({ loan }) => {
   const progress = totalCycle > 0 ? Math.min((paid / totalCycle) * 100, 100) : 0;
 
   // === Semanas pagadas / restantes — SOLO por MONTO (floor) ===
-  const weeksPaid = weeklyPayment > 0
-    ? Math.min(termWeeks, Math.floor(paid / weeklyPayment))
-    : 0;
+  const weeksPaid =
+    weeklyPayment > 0 ? Math.min(termWeeks, Math.floor(paid / weeklyPayment)) : 0;
 
   const weeksRemaining = Math.max(0, termWeeks - weeksPaid);
 
   // Crédito acumulado (sobrante que se aplicará al siguiente pago)
-  const rolloverCredit = weeklyPayment > 0 ? (paid % weeklyPayment) : 0;
+  const rolloverCredit = weeklyPayment > 0 ? paid % weeklyPayment : 0;
 
   // Fechas (mostrar exactamente lo guardado)
-  const startDateText       = safeDate(loan.start_date ?? loan.startDate ?? loan.date);
-  const nextPaymentDateText = safeDate(loan.next_payment_date ?? loan.nextDueDate ?? loan.due_date_next);
-
-  // ===== Editor de fecha de inicio =====
-  const initialStartISO = useMemo(
-    () => toDateInput(loan.start_date ?? loan.startDate ?? loan.date),
-    [loan.start_date, loan.startDate, loan.date]
+  const startDateText = safeDate(loan.start_date ?? loan.startDate ?? loan.date);
+  const nextPaymentDateText = safeDate(
+    loan.next_payment_date ?? loan.nextDueDate ?? loan.due_date_next
   );
-  const [newStart, setNewStart] = useState(initialStartISO);
-  const [saving, setSaving] = useState(false);
+
   const canSave = !!newStart && newStart !== initialStartISO;
 
   const handleSaveStartDate = async () => {
     if (!canSave) return;
+
     try {
       setSaving(true);
-      const startISO = newStart;                // YYYY-MM-DD
-      const nextISO  = addDaysISO(startISO, 7);
-      const dueISO   = addDaysISO(startISO, termWeeks * 7);
+
+      const startISO = newStart; // YYYY-MM-DD
+      const nextISO = addDaysISO(startISO, 7);
+      const dueISO = addDaysISO(startISO, termWeeks * 7);
 
       const { error } = await supabase
         .from('loans')
@@ -169,7 +199,9 @@ const LoanDetails = ({ loan }) => {
 
       toast({
         title: 'Fecha de inicio actualizada',
-        description: `Inicio: ${safeDate(startISO)} · Próx. pago: ${safeDate(nextISO)} · Vence: ${safeDate(dueISO)}`
+        description: `Inicio: ${safeDate(startISO)} · Próx. pago: ${safeDate(
+          nextISO
+        )} · Vence: ${safeDate(dueISO)}`,
       });
 
       await refreshData?.();
@@ -194,7 +226,9 @@ const LoanDetails = ({ loan }) => {
         </div>
         <div>
           <Label className="text-sm font-medium text-gray-600">Estado</Label>
-          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${statusInfo.color}`}>
+          <span
+            className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${statusInfo.color}`}
+          >
             {statusInfo.text}
           </span>
         </div>
@@ -260,7 +294,9 @@ const LoanDetails = ({ loan }) => {
       {/* Crédito acumulado y semanas restantes */}
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <Label className="text-sm font-medium text-gray-600">Crédito aplicado a próxima semana</Label>
+          <Label className="text-sm font-medium text-gray-600">
+            Crédito aplicado a próxima semana
+          </Label>
           <p className="text-gray-900 font-semibold">${money(rolloverCredit)}</p>
         </div>
         <div>
@@ -286,13 +322,11 @@ const LoanDetails = ({ loan }) => {
           <Label className="text-sm font-medium text-gray-600">
             Cambiar fecha de inicio del préstamo
           </Label>
-          <Input
-            type="date"
-            value={newStart}
-            onChange={(e) => setNewStart(e.target.value)}
-          />
+          <Input type="date" value={newStart} onChange={(e) => setNewStart(e.target.value)} />
           <p className="text-xs text-muted-foreground">
-            Al guardar se recalcularán el <b>próximo pago (+7 días)</b> y la <b>fecha de vencimiento (+{termWeeks} semanas)</b>. No se modifican saldos ni pagos.
+            Al guardar se recalcularán el <b>próximo pago (+7 días)</b> y la{' '}
+            <b>fecha de vencimiento (+{termWeeks} semanas)</b>. No se modifican saldos ni
+            pagos.
           </p>
         </div>
         <div className="flex gap-2 md:justify-end">
@@ -304,11 +338,7 @@ const LoanDetails = ({ loan }) => {
           >
             Deshacer
           </Button>
-          <Button
-            type="button"
-            onClick={handleSaveStartDate}
-            disabled={!canSave || saving}
-          >
+          <Button type="button" onClick={handleSaveStartDate} disabled={!canSave || saving}>
             {saving ? 'Guardando…' : 'Guardar cambio'}
           </Button>
         </div>
