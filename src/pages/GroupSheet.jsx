@@ -55,7 +55,11 @@ const toDateInput = (dLike) => {
 
 /* ===== Normalización de texto multilínea para evitar huecos ===== */
 const normalizeMultiline = (s) =>
-  toStr(s).replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{2,}/g, "\n").trim();
+  toStr(s)
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
 
 const joinLines = (...parts) =>
   parts
@@ -103,7 +107,8 @@ function FincenLogo() {
 /* ==============================
    Helpers de catálogos
 ============================== */
-const uniqSorted = (arr) => Array.from(new Set(arr.filter(Boolean))).sort((a, b) => a.localeCompare(b));
+const uniqSorted = (arr) =>
+  Array.from(new Set((arr || []).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 
 const getPoblacionesFromClients = (clients) => uniqSorted((clients || []).map((c) => toStr(c.poblacion)));
 
@@ -167,8 +172,7 @@ const filterLoansByClientGrupo = ({ allLoans, clientsById, grupo }) => {
   });
 };
 
-const keepOnlyActiveLoans = (loansList) =>
-  (loansList || []).filter((l) => toStr(l?.status).toLowerCase() === "active");
+const keepOnlyActiveLoans = (loansList) => (loansList || []).filter((l) => toStr(l?.status).toLowerCase() === "active");
 
 const filterLoansByStartDateS1 = ({ loansList, startDate }) => {
   const s1 = startDate ? toDateInput(startDate) : "";
@@ -185,14 +189,16 @@ const pickMostRecentLoanPerClient = (loansList) => {
   for (const l of loansList || []) {
     const nl = normalizeLoanRow(l);
     const t = new Date(nl.start || nl.created || 0).getTime();
+
     const cur = byClient.get(l.client_id);
     if (!cur) {
       byClient.set(l.client_id, l);
       continue;
     }
-    const curT = new Date(
-      normalizeLoanRow(cur).start || normalizeLoanRow(cur).created || 0
-    ).getTime();
+
+    const curNL = normalizeLoanRow(cur);
+    const curT = new Date(curNL.start || curNL.created || 0).getTime();
+
     if (t > curT) byClient.set(l.client_id, l);
   }
 
@@ -233,9 +239,7 @@ const fetchAvalesMap = async (clientIds) => {
 
 const buildGuaranteesMapFromSets = (setsMap) => {
   const out = {};
-  for (const [cid, set] of Object.entries(setsMap)) {
-    out[cid] = set;
-  }
+  for (const [cid, set] of Object.entries(setsMap)) out[cid] = set;
   return out;
 };
 
@@ -259,10 +263,12 @@ const fetchGuaranteesMap = async ({ clientIds, loansToShow }) => {
   const gByLoan = gByLoanRes?.data || [];
 
   const clientsSetMap = {}; // client_id -> Set()
+
   const addG = (cid, g) => {
     if (!cid) return;
     const txt = formatGuarantee(g);
     if (!txt) return;
+
     if (!clientsSetMap[cid]) clientsSetMap[cid] = new Set();
     clientsSetMap[cid].add(txt);
   };
@@ -324,6 +330,7 @@ const buildRowForLoan = ({ loan, idx, clientsById, avalesMap, guaranteesMap }) =
 const applySearchFilter = (rows, search) => {
   const q = toStr(search).toLowerCase();
   if (!q) return rows || [];
+
   return (rows || []).filter((r) =>
     [
       r.cliente,
@@ -405,10 +412,36 @@ const buildPdfFilename = ({ startDate, ruta, poblacion }) => {
 };
 
 /* ==============================
+   FIX Sonar: evitar nesting profundo
+============================== */
+const safeDecodeImage = async (img) => {
+  try {
+    if (img?.decode) await img.decode();
+  } catch {
+    // ignore
+  }
+};
+
+const loadImageOnce = (src) =>
+  new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+
+const waitForLogoLoaded = async (src) => {
+  const img = await loadImageOnce(src);
+  if (!img) return false;
+  await safeDecodeImage(img);
+  return true;
+};
+
+/* ==============================
    Componente principal
 ============================== */
 export default function GroupSheet() {
-  const { clients = [], loans = [], payments = [], loading: dataLoading = false } = useData() || {};
+  const { clients = [], loans = [], loading: dataLoading = false } = useData() || {};
 
   const [poblaciones, setPoblaciones] = useState([]);
   const [rutas, setRutas] = useState([]);
@@ -426,17 +459,7 @@ export default function GroupSheet() {
 
   const printRef = useRef(null);
 
-  const waitForLogo = useCallback(() => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        if (img.decode) img.decode().finally(() => resolve(true));
-        else resolve(true);
-      };
-      img.onerror = () => resolve(false);
-      img.src = fincenLogoUrl;
-    });
-  }, []);
+  const waitForLogo = useCallback(() => waitForLogoLoaded(fincenLogoUrl), []);
 
   const handleDownloadPDF = useCallback(async () => {
     try {
@@ -506,6 +529,7 @@ export default function GroupSheet() {
       // 1) Clientes por población y (opcional) ruta
       const groupClients = filterClientsForSheet(clients, poblacion, ruta);
       const clientIds = groupClients.map((c) => c.id);
+
       if (!clientIds.length) {
         clearRows();
         return;
@@ -546,8 +570,7 @@ export default function GroupSheet() {
       }
 
       // 7) Search
-      const filtered = applySearchFilter(baseRows, search);
-      setRows(filtered);
+      setRows(applySearchFilter(baseRows, search));
     } catch (e) {
       console.error("GroupSheet error:", e);
       clearRows();
@@ -567,7 +590,10 @@ export default function GroupSheet() {
 
   const groupLabel = useMemo(() => (grupo ? `GRUPO ${grupo}` : "GRUPO"), [grupo]);
 
-  const totalPagos = useMemo(() => rows.reduce((acc, r) => acc + (Number(r?.pagoSemanal) || 0), 0), [rows]);
+  const totalPagos = useMemo(
+    () => rows.reduce((acc, r) => acc + (Number(r?.pagoSemanal) || 0), 0),
+    [rows]
+  );
 
   return (
     <div className="p-6 max-w-[1280px] mx-auto">
