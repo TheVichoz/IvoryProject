@@ -1,5 +1,6 @@
 // src/pages/ClientFile.jsx
 import React, { useState, useMemo, useEffect } from 'react';
+import PropTypes from 'prop-types';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet';
 import { motion } from 'framer-motion';
@@ -35,6 +36,7 @@ const num = (v) => {
   const n = Number(String(v).replace(/[^\d.-]/g, ''));
   return Number.isFinite(n) ? n : 0;
 };
+
 const toMoney = (v) => num(v).toLocaleString('es-MX');
 
 const fmtMoney = (n) =>
@@ -85,21 +87,25 @@ const weeksPaidForLoan = (loan, payments) => {
 
   const weeks = num(loan.term_weeks ?? loan.term ?? loan.weeks ?? DEFAULT_WEEKS) || DEFAULT_WEEKS;
   const ratePct = num(loan.interest_rate ?? DEFAULT_RATE);
-  const total_amount = num(loan.total_amount) || num(loan.amount) * (1 + ratePct / 100);
-  const weekly_payment = num(loan.weekly_payment) || (weeks > 0 ? Math.ceil(total_amount / weeks) : 0);
-  if (weekly_payment <= 0) return 0;
+  const totalAmount = num(loan.total_amount) || num(loan.amount) * (1 + ratePct / 100);
+  const weeklyPayment = num(loan.weekly_payment) || (weeks > 0 ? Math.ceil(totalAmount / weeks) : 0);
+  if (weeklyPayment <= 0) return 0;
 
   let totalPaid = 0;
   (payments || []).forEach((p) => {
     const pid = p.loan_id ?? p.prestamo_id ?? p.loanId;
     const sameLoan = String(pid) === loanId;
-    const st = String(p.status || '').toLowerCase();
-    if (sameLoan && (!p.status || OK_PAYMENT_STATUS.has(st))) {
+
+    const rawStatus = p.status;
+    const st = String(rawStatus || '').toLowerCase();
+    const statusOk = rawStatus ? OK_PAYMENT_STATUS.has(st) : true;
+
+    if (sameLoan && statusOk) {
       totalPaid += num(p.amount ?? p.monto ?? p.payment_amount ?? p.importe);
     }
   });
 
-  const byAmount = Math.floor(totalPaid / weekly_payment);
+  const byAmount = Math.floor(totalPaid / weeklyPayment);
   return Math.min(weeks, byAmount);
 };
 
@@ -130,6 +136,7 @@ async function backfillHistoricLoanGroups({ clientId, oldGrupo, loans, updateLoa
     .filter((l) => String(l.status || l.estado_prestamo || '').toLowerCase() !== 'active')
     .filter((l) => !l.grupo || String(l.grupo).trim() === '')
     .map((l) => updateLoan(l.id, { grupo: oldGrupo }));
+
   if (tasks.length) {
     await Promise.allSettled(tasks);
   }
@@ -143,26 +150,40 @@ const LoanItem = ({ loan, clientGrupo, isAdmin, onEdit }) => {
   const startISO = loan.start_date || loan.fecha;
   const startTxt = fmtDate(startISO);
 
-  const weeks =
-    loan.term_weeks ??
-    (loan.term ? Number(String(loan.term).match(/\d+/)?.[0]) : undefined) ??
-    DEFAULT_WEEKS;
+  // ✅ Sonar: RegExp.exec en vez de match()
+  let weeksFromTerm;
+  if (loan.term) {
+    const m = /\d+/.exec(String(loan.term));
+    weeksFromTerm = m ? Number(m[0]) : undefined;
+  }
+
+  const weeks = loan.term_weeks ?? weeksFromTerm ?? DEFAULT_WEEKS;
   const plazoTxt = loan.term ? loan.term : `${weeks} semanas`;
 
-  // Estado y grupo a mostrar (los completed NUNCA heredan del cliente)
   const st = String(loan.status || loan.estado_prestamo || '').toLowerCase();
   const isActive = st === 'active';
-  const loanGrupoStr = loan.grupo != null ? String(loan.grupo).trim() : '';
-  const grupo = loanGrupoStr ? loanGrupoStr : (isActive ? (clientGrupo || 'Sin especificar') : 'Sin especificar');
 
+  // ✅ sin ternario anidado
+  const loanGrupoStr = loan.grupo != null ? String(loan.grupo).trim() : '';
+  let grupo = 'Sin especificar';
+  if (loanGrupoStr) {
+    grupo = loanGrupoStr;
+  } else if (isActive) {
+    grupo = clientGrupo || 'Sin especificar';
+  }
+
+  // ✅ default assignment sin ternario raro
   let rate = loan.interest_rate;
-  if ((rate === undefined || rate === null) && loan.interest_amount != null && amount) {
+  const hasRate = rate !== undefined && rate !== null;
+
+  if (!hasRate && loan.interest_amount != null && amount) {
     const pct = (Number(loan.interest_amount) / amount) * 100;
     if (Number.isFinite(pct)) rate = Math.round(pct);
   }
-  if (rate === undefined || rate === null) rate = DEFAULT_RATE;
-  const interesTxt = `${rate}%`;
 
+  if (rate === undefined || rate === null) rate = DEFAULT_RATE;
+
+  const interesTxt = `${rate}%`;
   const weekly = loan.weekly_payment ?? calcFlat({ amount, ratePercent: rate, weeks }).weekly;
 
   const dueISO = loan.due_date ?? (startISO ? addDays(startISO, weeks * 7 - 1) : null);
@@ -210,11 +231,25 @@ const LoanItem = ({ loan, clientGrupo, isAdmin, onEdit }) => {
   );
 };
 
+LoanItem.propTypes = {
+  loan: PropTypes.object.isRequired,
+  clientGrupo: PropTypes.string,
+  isAdmin: PropTypes.bool,
+  onEdit: PropTypes.func,
+};
+
+LoanItem.defaultProps = {
+  clientGrupo: '',
+  isAdmin: false,
+  onEdit: () => {},
+};
+
 /* ==========================
    Previsualización en el modal de edición
 ========================== */
 const PreviewEditedTotals = ({ amount, rate, weeks, alreadyPaid }) => {
   if (!amount || amount <= 0) return null;
+
   const interest = Math.round(amount * (rate / 100));
   const total = amount + interest;
   const weekly = weeks > 0 ? Math.ceil(total / weeks) : 0;
@@ -228,11 +263,32 @@ const PreviewEditedTotals = ({ amount, rate, weeks, alreadyPaid }) => {
         <div><span className="text-muted-foreground">Total con interés:</span> <b>${toMoney(total)}</b></div>
         <div><span className="text-muted-foreground">Semanal:</span> <b>${toMoney(weekly)}</b></div>
         <div><span className="text-muted-foreground">Pagado:</span> <b>${toMoney(alreadyPaid || 0)}</b></div>
-        <div><span className="text-muted-foreground">Saldo:</span> <b className={willComplete ? 'text-emerald-600' : ''}>${toMoney(remaining)}</b></div>
+        <div>
+          <span className="text-muted-foreground">Saldo:</span>{' '}
+          <b className={willComplete ? 'text-emerald-600' : ''}>${toMoney(remaining)}</b>
+        </div>
       </div>
-      {willComplete && <div className="mt-2 text-emerald-700 font-medium">Con este cambio, el préstamo quedará liquidado (completed).</div>}
+      {willComplete && (
+        <div className="mt-2 text-emerald-700 font-medium">
+          Con este cambio, el préstamo quedará liquidado (completed).
+        </div>
+      )}
     </div>
   );
+};
+
+PreviewEditedTotals.propTypes = {
+  amount: PropTypes.number,
+  rate: PropTypes.number,
+  weeks: PropTypes.number,
+  alreadyPaid: PropTypes.number,
+};
+
+PreviewEditedTotals.defaultProps = {
+  amount: 0,
+  rate: DEFAULT_RATE,
+  weeks: DEFAULT_WEEKS,
+  alreadyPaid: 0,
 };
 
 /* ==========================
@@ -269,10 +325,12 @@ const ClientFile = () => {
     () => clients.find((c) => c.id.toString() === clientId),
     [clients, clientId]
   );
+
   const clientLoans = useMemo(
     () => loans.filter((l) => l.client_id?.toString() === clientId),
     [loans, clientId]
   );
+
   const clientGuarantees = useMemo(
     () => guarantees.filter((g) => g.client_id?.toString() === clientId),
     [guarantees, clientId]
@@ -282,6 +340,7 @@ const ClientFile = () => {
     () => getClientDerivedStatus(client, clientLoans),
     [client, clientLoans]
   );
+
   const clientWithDerived = useMemo(
     () => (client ? { ...client, status: derivedStatus } : null),
     [client, derivedStatus]
@@ -293,9 +352,9 @@ const ClientFile = () => {
     const b = String(l?.estado_prestamo || '').toLowerCase();
     return a === 'active' || b === 'activo';
   };
+
   const activeLoans = useMemo(() => clientLoans.filter(isActiveLoan), [clientLoans]);
-  const activeLoansCount = activeLoans.length;
-  const hasActiveLoan = activeLoansCount > 0;
+  const hasActiveLoan = activeLoans.length > 0;
   const activeLoan = hasActiveLoan ? activeLoans[0] : null;
 
   const renewable = useMemo(() => {
@@ -433,7 +492,7 @@ const ClientFile = () => {
       if (!renewLoan) return;
       const requested = num(requestedAmount);
       const remaining = num(renewLoan._remaining ?? renewLoan.remaining_balance);
-      const deliver   = Math.max(0, requested - remaining);
+      const deliver = Math.max(0, requested - remaining);
 
       if (requested <= 0) {
         toast({ variant: 'destructive', title: 'Monto inválido', description: 'Ingresa un monto solicitado mayor a 0.' });
@@ -458,13 +517,13 @@ const ClientFile = () => {
           status: 'completed',
           total_paid: num(renewLoan.total_paid) + remaining,
           remaining_balance: 0,
-          grupo: (renewLoan.grupo ?? clientWithDerived.grupo) || null, // snapshot si faltaba
+          grupo: (renewLoan.grupo ?? clientWithDerived.grupo) || null,
         });
       }
 
       // 2) Crear nuevo préstamo con snapshot de grupo
       const weeksCount = num(renewLoan.term_weeks ?? renewLoan.term ?? 14) || 14;
-      const rate  = num(renewLoan.interest_rate ?? 40);
+      const rate = num(renewLoan.interest_rate ?? 40);
       const start_date = new Date().toISOString().slice(0, 10);
 
       const totalOverNet = deliver * (1 + rate / 100);
@@ -484,7 +543,7 @@ const ClientFile = () => {
         next_payment_date,
         due_date,
         status: 'active',
-        grupo: (renewLoan.grupo ?? clientWithDerived?.grupo) || null, // snapshot
+        grupo: (renewLoan.grupo ?? clientWithDerived?.grupo) || null,
       });
 
       setIsRenewOpen(false);
@@ -525,19 +584,19 @@ const ClientFile = () => {
       }
 
       const weeks = num(loanToEdit.term_weeks ?? loanToEdit.term ?? DEFAULT_WEEKS) || DEFAULT_WEEKS;
-      const rate  = num(loanToEdit.interest_rate ?? DEFAULT_RATE);
+      const rate = num(loanToEdit.interest_rate ?? DEFAULT_RATE);
       const newGrupo = (editGrupo || '').trim();
 
       const interest = Math.round(base * (rate / 100));
-      const total    = base + interest;
-      const weekly   = weeks > 0 ? Math.ceil(total / weeks) : 0;
+      const total = base + interest;
+      const weekly = weeks > 0 ? Math.ceil(total / weeks) : 0;
 
       const alreadyPaid = num(loanToEdit.total_paid ?? loanToEdit.paid_amount);
-      const remaining   = Math.max(total - alreadyPaid, 0);
-      const newStatus   = remaining <= 0 ? 'completed' : 'active';
+      const remaining = Math.max(total - alreadyPaid, 0);
+      const newStatus = remaining <= 0 ? 'completed' : 'active';
 
-      const startISO    = loanToEdit.start_date ?? null;
-      const due_date    = startISO ? addDaysISO(startISO, weeks * 7 - 1) : loanToEdit.due_date ?? null;
+      const startISO = loanToEdit.start_date ?? null;
+      const due_date = startISO ? addDaysISO(startISO, weeks * 7 - 1) : (loanToEdit.due_date ?? null);
 
       await updateLoan(loanToEdit.id, {
         amount: base,
@@ -586,11 +645,17 @@ const ClientFile = () => {
         )
       : 0;
 
+  // ids accesibles
+  const idMontoSolicitado = 'renew_requested_amount';
+  const idEditAmount = 'edit_amount';
+  const idEditGrupo = 'edit_grupo';
+
   return (
     <>
       <Helmet>
         <title>Ficha de Cliente: {clientWithDerived.name}</title>
       </Helmet>
+
       <div className="space-y-6">
         <PageHeader title="Ficha de Cliente" description={`Detalles de ${clientWithDerived.name}`}>
           <div className="flex items-center gap-2">
@@ -771,20 +836,30 @@ const ClientFile = () => {
 
           <div className="space-y-3">
             <div>
-              <label className="text-sm text-muted-foreground">Cliente</label>
-              <div className="font-medium">{renewLoan?.client_name ?? clientWithDerived.name}</div>
+              <label className="text-sm text-muted-foreground" htmlFor="renew_cliente">
+                Cliente
+              </label>
+              <div id="renew_cliente" className="font-medium">
+                {renewLoan?.client_name ?? clientWithDerived.name}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-sm text-muted-foreground">Saldo pendiente actual</label>
-                <div className="font-semibold text-orange-600">
+                <label className="text-sm text-muted-foreground" htmlFor="renew_saldo">
+                  Saldo pendiente actual
+                </label>
+                <div id="renew_saldo" className="font-semibold text-orange-600">
                   ${toMoney(renewLoan ? (renewLoan._remaining ?? renewLoan.remaining_balance) : remainingForActive)}
                 </div>
               </div>
+
               <div>
-                <label className="text-sm text-muted-foreground">Monto solicitado *</label>
+                <label className="text-sm text-muted-foreground" htmlFor={idMontoSolicitado}>
+                  Monto solicitado *
+                </label>
                 <Input
+                  id={idMontoSolicitado}
                   value={requestedAmount}
                   onChange={(e) => setRequestedAmount(e.target.value)}
                   placeholder="p. ej., 4000"
@@ -793,8 +868,10 @@ const ClientFile = () => {
             </div>
 
             <div>
-              <label className="text-sm text-muted-foreground">Monto a entregar</label>
-              <div className="font-semibold">
+              <label className="text-sm text-muted-foreground" htmlFor="renew_entregar">
+                Monto a entregar
+              </label>
+              <div id="renew_entregar" className="font-semibold">
                 ${toMoney(Math.max(0, num(requestedAmount) - num(renewLoan?._remaining ?? remainingForActive)))}
               </div>
             </div>
@@ -817,18 +894,30 @@ const ClientFile = () => {
 
           <div className="space-y-3">
             <div>
-              <label className="text-sm text-muted-foreground">Cliente</label>
-              <div className="font-medium">{loanToEdit?.client_name ?? clientWithDerived.name}</div>
+              <label className="text-sm text-muted-foreground" htmlFor="edit_cliente">
+                Cliente
+              </label>
+              <div id="edit_cliente" className="font-medium">
+                {loanToEdit?.client_name ?? clientWithDerived.name}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-sm text-muted-foreground">Monto actual</label>
-                <div className="font-semibold">${toMoney(loanToEdit?.amount ?? 0)}</div>
+                <label className="text-sm text-muted-foreground" htmlFor="edit_monto_actual">
+                  Monto actual
+                </label>
+                <div id="edit_monto_actual" className="font-semibold">
+                  ${toMoney(loanToEdit?.amount ?? 0)}
+                </div>
               </div>
+
               <div>
-                <label className="text-sm text-muted-foreground">Nuevo monto *</label>
+                <label className="text-sm text-muted-foreground" htmlFor={idEditAmount}>
+                  Nuevo monto *
+                </label>
                 <Input
+                  id={idEditAmount}
                   value={editAmount}
                   onChange={(e) => setEditAmount(e.target.value)}
                   placeholder="p. ej., 3500"
@@ -838,12 +927,20 @@ const ClientFile = () => {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-sm text-muted-foreground">Grupo actual</label>
-                <div className="font-semibold">{loanToEdit?.grupo ?? clientWithDerived.grupo ?? '—'}</div>
+                <label className="text-sm text-muted-foreground" htmlFor="edit_grupo_actual">
+                  Grupo actual
+                </label>
+                <div id="edit_grupo_actual" className="font-semibold">
+                  {loanToEdit?.grupo ?? clientWithDerived.grupo ?? '—'}
+                </div>
               </div>
+
               <div>
-                <label className="text-sm text-muted-foreground">Nuevo grupo</label>
+                <label className="text-sm text-muted-foreground" htmlFor={idEditGrupo}>
+                  Nuevo grupo
+                </label>
                 <Input
+                  id={idEditGrupo}
                   value={editGrupo}
                   onChange={(e) => setEditGrupo(e.target.value)}
                   placeholder="Ej. 5, 5A, etc."
