@@ -106,7 +106,8 @@ function getSemaphoreForClient(client, loans) {
     const today = new Date();
     const startOf = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
     const days =
-      (startOf(due).getTime() - startOf(today).getTime()) / (1000 * 60 * 60 * 24);
+      (startOf(due).getTime() - startOf(today).getTime()) /
+      (1000 * 60 * 60 * 24);
 
     if (days < 0) return { color: 'red', label: 'Pago atrasado' };
     if (days <= DUE_SOON_DAYS) return { color: 'yellow', label: 'Pago próximo' };
@@ -139,7 +140,15 @@ function SemaphoreBadge({ sem }) {
 }
 
 /* ========== Tarjeta de cliente ========== */
-const ClientCard = ({ client, onSelect, onEdit, onDelete, isAdmin, semaphore, derivedStatus }) => {
+const ClientCard = ({
+  client,
+  onSelect,
+  onEdit,
+  onDelete,
+  isAdmin,
+  semaphore,
+  derivedStatus,
+}) => {
   const { canWrite } = useRole(); // 👈 ADMIN_GENERAL = true, ADMIN_RUTA = false
 
   return (
@@ -163,7 +172,9 @@ const ClientCard = ({ client, onSelect, onEdit, onDelete, isAdmin, semaphore, de
               </p>
             )}
 
-            <p className="text-sm text-muted-foreground truncate">{client.email}</p>
+            <p className="text-sm text-muted-foreground truncate">
+              {client.email}
+            </p>
           </div>
 
           {/* Derecha: badges en columna */}
@@ -194,9 +205,21 @@ const ClientCard = ({ client, onSelect, onEdit, onDelete, isAdmin, semaphore, de
 
             {/* Población, Grupo y Ruta */}
             <div className="mt-3 flex flex-col gap-1 text-sm text-muted-foreground">
-              {client.poblacion && <p><strong>Población:</strong> {client.poblacion}</p>}
-              {client.grupo && <p><strong>Grupo:</strong> {client.grupo}</p>}
-              {client.ruta && <p><strong>Ruta:</strong> {client.ruta}</p>}
+              {client.poblacion && (
+                <p>
+                  <strong>Población:</strong> {client.poblacion}
+                </p>
+              )}
+              {client.grupo && (
+                <p>
+                  <strong>Grupo:</strong> {client.grupo}
+                </p>
+              )}
+              {client.ruta && (
+                <p>
+                  <strong>Ruta:</strong> {client.ruta}
+                </p>
+              )}
             </div>
           </div>
 
@@ -239,7 +262,8 @@ const ClientCard = ({ client, onSelect, onEdit, onDelete, isAdmin, semaphore, de
 
 /* ========== Página ========== */
 const ClientManagement = () => {
-  const { clients, loans = [], addClient, updateClient, deleteClient, loading } = useData();
+  const { clients, loans = [], addClient, updateClient, deleteClient, loading } =
+    useData();
   const { isAdmin } = useAuth(); // mantenemos isAdmin para eliminar
   const { canWrite } = useRole(); // 👈 controlar visibilidad de acciones (ADMIN_GENERAL)
 
@@ -257,17 +281,30 @@ const ClientManagement = () => {
   const toState = (v) => (v === 'all' ? '' : v);
   const toUI = (v) => (v ? v : 'all');
 
+  // Comparador explícito (arregla los issues de Sonar en .sort())
+  const sortEs = (a, b) =>
+    String(a).localeCompare(String(b), 'es', { sensitivity: 'base' });
+
   // Valores únicos
   const poblaciones = useMemo(
-    () => Array.from(new Set(clients.map(c => c.poblacion).filter(Boolean))).sort(),
+    () =>
+      Array.from(new Set(clients.map((c) => c.poblacion).filter(Boolean))).sort(
+        sortEs
+      ),
     [clients]
   );
   const grupos = useMemo(
-    () => Array.from(new Set(clients.map(c => c.grupo).filter(Boolean))).sort(),
+    () =>
+      Array.from(new Set(clients.map((c) => c.grupo).filter(Boolean))).sort(
+        sortEs
+      ),
     [clients]
   );
   const rutas = useMemo(
-    () => Array.from(new Set(clients.map(c => c.ruta).filter(Boolean))).sort(),
+    () =>
+      Array.from(new Set(clients.map((c) => c.ruta).filter(Boolean))).sort(
+        sortEs
+      ),
     [clients]
   );
 
@@ -276,11 +313,11 @@ const ClientManagement = () => {
   const term = raw.toLowerCase();
   const idQueryMatch = /^#?\d+$/.test(raw) || /^id:\s*\d+$/i.test(raw);
   const idNeedle = idQueryMatch
-    ? (raw.startsWith('#')
-        ? raw.slice(1)
-        : raw.toLowerCase().startsWith('id:')
-        ? raw.slice(3).trim()
-        : raw)
+    ? raw.startsWith('#')
+      ? raw.slice(1)
+      : raw.toLowerCase().startsWith('id:')
+      ? raw.slice(3).trim()
+      : raw
     : null;
 
   // Filtrado combinado
@@ -308,35 +345,55 @@ const ClientManagement = () => {
     try {
       if (editingClient) {
         await updateClient(editingClient.id, clientData);
-        toast({ title: 'Cliente actualizado', description: 'Los datos del cliente se han guardado.' });
+        toast({
+          title: 'Cliente actualizado',
+          description: 'Los datos del cliente se han guardado.',
+        });
       } else {
         const newClient = await addClient(clientData);
-        toast({ title: 'Cliente agregado', description: 'El nuevo cliente ha sido registrado.' });
+        toast({
+          title: 'Cliente agregado',
+          description: 'El nuevo cliente ha sido registrado.',
+        });
         navigate(`/admin/clients/${newClient.id}`);
       }
       setIsFormOpen(false);
       setEditingClient(null);
     } catch (error) {
-      toast({ variant: 'destructive', title: 'Error', description: error.message });
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: error.message,
+      });
     }
   };
 
   const handleSelectClient = (client) => navigate(`/admin/clients/${client.id}`);
-  const handleEditClient = (client) => { setEditingClient(client); setIsFormOpen(true); };
+  const handleEditClient = (client) => {
+    setEditingClient(client);
+    setIsFormOpen(true);
+  };
   const handleAddNew = () => navigate('/admin/clients/add');
 
   const handleDeleteClient = async () => {
     if (!clientToDelete) return;
     try {
       await deleteClient(clientToDelete.id);
-      toast({ title: 'Cliente eliminado', description: `${clientToDelete.name} ha sido eliminado.` });
+      toast({
+        title: 'Cliente eliminado',
+        description: `${clientToDelete.name} ha sido eliminado.`,
+      });
       setClientToDelete(null);
     } catch (error) {
       const rawErr = (error?.message || '').toLowerCase();
       const readable = rawErr.includes('cliente_tiene_prestamo_activo')
         ? 'No se puede eliminar: el cliente tiene un préstamo vigente.'
         : error?.message || 'Error al eliminar';
-      toast({ variant: 'destructive', title: 'No se pudo eliminar', description: readable });
+      toast({
+        variant: 'destructive',
+        title: 'No se pudo eliminar',
+        description: readable,
+      });
     }
   };
 
@@ -346,7 +403,9 @@ const ClientManagement = () => {
 
   return (
     <>
-      <Helmet><title>Gestión de Clientes - FinanComunitaria</title></Helmet>
+      <Helmet>
+        <title>Gestión de Clientes - FinanComunitaria</title>
+      </Helmet>
 
       <div className="space-y-6">
         <PageHeader
@@ -371,7 +430,10 @@ const ClientManagement = () => {
         >
           {/* IZQUIERDA: Buscador */}
           <div className="w-full md:max-w-xl">
-            <Label htmlFor="client-search" className="mb-1 block text-sm text-muted-foreground">
+            <Label
+              htmlFor="client-search"
+              className="mb-1 block text-sm text-muted-foreground"
+            >
               Búsqueda rápida
             </Label>
             <div className="relative">
@@ -405,14 +467,19 @@ const ClientManagement = () => {
                   <MapPin className="h-3.5 w-3.5" />
                   Filtrar por población
                 </Label>
-                <Select value={toUI(filterPoblacion)} onValueChange={(v) => setFilterPoblacion(toState(v))}>
+                <Select
+                  value={toUI(filterPoblacion)}
+                  onValueChange={(v) => setFilterPoblacion(toState(v))}
+                >
                   <SelectTrigger className="h-10">
                     <SelectValue placeholder="Selecciona" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todas</SelectItem>
                     {poblaciones.map((p) => (
-                      <SelectItem key={p} value={p}>{p}</SelectItem>
+                      <SelectItem key={p} value={p}>
+                        {p}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -424,14 +491,19 @@ const ClientManagement = () => {
                   <Users className="h-3.5 w-3.5" />
                   Filtrar por grupo
                 </Label>
-                <Select value={toUI(filterGrupo)} onValueChange={(v) => setFilterGrupo(toState(v))}>
+                <Select
+                  value={toUI(filterGrupo)}
+                  onValueChange={(v) => setFilterGrupo(toState(v))}
+                >
                   <SelectTrigger className="h-10">
                     <SelectValue placeholder="Selecciona" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos</SelectItem>
                     {grupos.map((g) => (
-                      <SelectItem key={g} value={g}>{g}</SelectItem>
+                      <SelectItem key={g} value={g}>
+                        {g}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -443,14 +515,19 @@ const ClientManagement = () => {
                   <RouteIcon className="h-3.5 w-3.5" />
                   Filtrar por ruta
                 </Label>
-                <Select value={toUI(filterRuta)} onValueChange={(v) => setFilterRuta(toState(v))}>
+                <Select
+                  value={toUI(filterRuta)}
+                  onValueChange={(v) => setFilterRuta(toState(v))}
+                >
                   <SelectTrigger className="h-10">
                     <SelectValue placeholder="Selecciona" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todas</SelectItem>
                     {rutas.map((r) => (
-                      <SelectItem key={r} value={r}>{r}</SelectItem>
+                      <SelectItem key={r} value={r}>
+                        {r}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -474,7 +551,10 @@ const ClientManagement = () => {
         {loading ? (
           <div className="text-center py-12">Cargando clientes...</div>
         ) : (
-          <motion.div layout className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <motion.div
+            layout
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+          >
             {filteredClients.map((client) => {
               const derivedStatus = getClientDerivedStatus(client, loans);
               const sem = getSemaphoreForClient(client, loans);
@@ -495,13 +575,21 @@ const ClientManagement = () => {
         )}
 
         {filteredClients.length === 0 && !loading && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-12">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="text-center py-12"
+          >
             <div className="text-muted-foreground mb-4">
               <Search className="h-16 w-16 mx-auto" />
             </div>
-            <h3 className="text-lg font-medium text-foreground mb-2">No se encontraron clientes</h3>
+            <h3 className="text-lg font-medium text-foreground mb-2">
+              No se encontraron clientes
+            </h3>
             <p className="text-muted-foreground">
-              {searchTerm ? 'Intenta con otros términos de búsqueda' : 'Comienza agregando tu primer cliente'}
+              {searchTerm
+                ? 'Intenta con otros términos de búsqueda'
+                : 'Comienza agregando tu primer cliente'}
             </p>
           </motion.div>
         )}
@@ -518,17 +606,24 @@ const ClientManagement = () => {
       </Dialog>
 
       {/* Eliminar: el botón solo se muestra a admin, pero dejamos el modal por si llega a abrirse */}
-      <AlertDialog open={!!clientToDelete} onOpenChange={() => setClientToDelete(null)}>
+      <AlertDialog
+        open={!!clientToDelete}
+        onOpenChange={() => setClientToDelete(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>¿Estás seguro?</AlertDialogTitle>
             <AlertDialogDescription>
-              Esta acción no se puede deshacer. Se intentará eliminar al cliente "{clientToDelete?.name}".
+              Esta acción no se puede deshacer. Se intentará eliminar al cliente "
+              {clientToDelete?.name}".
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteClient} className="bg-destructive hover:bg-destructive/90">
+            <AlertDialogAction
+              onClick={handleDeleteClient}
+              className="bg-destructive hover:bg-destructive/90"
+            >
               Sí, eliminar
             </AlertDialogAction>
           </AlertDialogFooter>
