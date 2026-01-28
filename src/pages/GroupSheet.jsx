@@ -13,16 +13,20 @@ const toStr = (v) => (v == null ? "" : String(v)).trim();
 
 /* =========================
    FIX fechas: parser local
+   (Sonar: usar RegExp.exec() en vez de String.match)
 ========================= */
 const parseLocalDate = (v) => {
   if (!v) return null;
+
   if (typeof v === "string") {
-    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const re = /^(\d{4})-(\d{2})-(\d{2})$/;
+    const m = re.exec(v); // ✅ exec()
     if (m) {
       const [, Y, M, D] = m;
       return new Date(Number(Y), Number(M) - 1, Number(D), 12, 0, 0, 0);
     }
   }
+
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return null;
   d.setHours(12, 0, 0, 0);
@@ -54,10 +58,12 @@ const toDateInput = (dLike) => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
-/* ===== Normalización de texto multilínea para evitar huecos ===== */
+/* ===== Normalización de texto multilínea para evitar huecos =====
+   (ESLint: prefer replaceAll cuando aplica)
+*/
 const normalizeMultiline = (s) =>
   toStr(s)
-    .replace(/\r\n/g, "\n")
+    .replaceAll("\r\n", "\n") // ✅ replaceAll
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{2,}/g, "\n")
     .trim();
@@ -299,14 +305,14 @@ const buildRowForLoan = ({ loan, idx, clientsById, avalesMap, guaranteesMap }) =
   if (!c) return null;
 
   const nl = normalizeLoanRow(loan);
-  const aval = avalesMap[c.id] || {};
+  const aval = avalesMap[c.id] || "";
   const garantias = guaranteesMap[c.id] ? Array.from(guaranteesMap[c.id]).join(" • ") : "";
 
   const clientPhone = c.phone ?? c.telefono ?? "";
   const dirCliente = joinLines(c.address ?? c.direccion ?? "", clientPhone && `Tel. ${clientPhone}`);
 
-  const avalPhone = aval.telefono ?? aval.phone ?? "";
-  const dirAval = joinLines(aval.direccion || "", avalPhone && `Tel. ${avalPhone}`);
+  const avalPhone = aval?.telefono ?? aval?.phone ?? "";
+  const dirAval = joinLines(aval?.direccion || "", avalPhone && `Tel. ${avalPhone}`);
 
   return {
     key: `${loan.id}`,
@@ -315,7 +321,7 @@ const buildRowForLoan = ({ loan, idx, clientsById, avalesMap, guaranteesMap }) =
     clientId: c.id,
     cliente: c.name ?? c.nombre ?? "(Sin nombre)",
     domicilio: dirCliente,
-    aval: aval.nombre || "",
+    aval: aval?.nombre || "",
     domicilioAval: dirAval,
     garantias,
     prestamo: nl.amount,
@@ -964,14 +970,21 @@ WeekEmptyCells.propTypes = {
   ).isRequired,
 };
 
-const keyFromText = (s) => `k-${toStr(s).toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-_]/g, "")}`;
+const keyFromText = (s) =>
+  `k-${toStr(s)
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-_]/g, "")}`;
 
 function GuaranteesList({ text }) {
   if (!text) return null;
 
-  const raw = text.split(" • ").map((x) => toStr(x)).filter(Boolean);
-  const counts = new Map();
+  const raw = text
+    .split(" • ")
+    .map((x) => toStr(x))
+    .filter(Boolean);
 
+  const counts = new Map();
   const items = raw.map((g) => {
     const base = keyFromText(g) || "k-empty";
     const n = (counts.get(base) || 0) + 1;
@@ -1087,8 +1100,7 @@ function renderTableBody({ loading, dataLoading, rows, weekHeaders }) {
 }
 
 function Table({ loading, dataLoading, rows, weekHeaders, weekColKeys }) {
-  const weekCount = weekHeaders.length;
-
+  // ✅ Sonar: quitamos weekCount si no se usa (unused assignment)
   return (
     <table className="gs-table w-full text-sm border" style={{ borderColor: "#000" }}>
       <colgroup>
