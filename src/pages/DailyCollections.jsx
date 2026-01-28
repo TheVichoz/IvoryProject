@@ -1,5 +1,5 @@
 // src/pages/DailyCollections.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useData } from "@/contexts/DataContext";
 import { supabase } from "@/lib/customSupabaseClient";
 
@@ -19,6 +19,124 @@ const nextDayISO = (dateStr) => {
   d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() + 1);
   return d.toISOString();
+};
+
+const isPaidStatus = (status) => {
+  const st = String(status || "").toLowerCase();
+  return st === "paid" || st === "pagado";
+};
+
+const paymentIsOnDate = (p, fecha) => {
+  const d = (p.payment_date || "").slice(0, 10);
+  return d === fecha;
+};
+
+const sortAlpha = (a, b) => a.localeCompare(b);
+
+const getClientsInTown = ({ clients, poblacion, ruta }) => {
+  let list = (clients || []).filter((c) => toStr(c.poblacion) === toStr(poblacion));
+  if (ruta) list = list.filter((c) => toStr(c.ruta) === toStr(ruta));
+  return list;
+};
+
+const uniqSorted = (arr) => Array.from(new Set(arr.filter(Boolean))).sort(sortAlpha);
+
+const buildCatalogsFrom = ({ clients, loans, poblacion }) => {
+  const source = poblacion
+    ? (clients || []).filter((c) => toStr(c.poblacion) === toStr(poblacion))
+    : [];
+
+  const rutasArr = uniqSorted(source.map((c) => toStr(c.ruta)));
+
+  // grupos: actuales (clients) + históricos (loans de esos clients)
+  const setG = new Set(source.map((c) => toStr(c.grupo)).filter(Boolean));
+  const sourceIds = new Set(source.map((c) => c.id));
+
+  for (const l of loans || []) {
+    if (sourceIds.has(l.client_id)) {
+      const lg = toStr(l.grupo);
+      if (lg) setG.add(lg);
+    }
+  }
+
+  const gruposArr = Array.from(setG).sort(sortAlpha);
+  return { source, rutasArr, gruposArr };
+};
+
+const getLoansForClientsLocal = ({ loans, clientIds }) =>
+  (loans || []).filter((l) => clientIds.includes(l.client_id));
+
+const fetchLoansForClients = async (clientIds) => {
+  const { data } = await supabase.from("loans").select("*").in("client_id", clientIds);
+  return data || [];
+};
+
+const filterLoansByGrupo = ({ loans, grupo }) => {
+  if (!grupo) return loans;
+  const g = toStr(grupo);
+  return (loans || []).filter((l) => toStr(l.grupo) === g);
+};
+
+const getPaidPaymentsLocal = ({ payments, loanIds, fecha }) =>
+  (payments || []).filter((p) => {
+    if (!loanIds.includes(p.loan_id)) return false;
+    if (!isPaidStatus(p.status)) return false;
+    return paymentIsOnDate(p, fecha);
+  });
+
+const fetchPaidPaymentsForDay = async ({ loanIds, fecha }) => {
+  const { data } = await supabase
+    .from("payments")
+    .select("id, loan_id, amount, payment_date, status, week, created_at")
+    .in("loan_id", loanIds)
+    .gte("payment_date", startOfDayISO(fecha))
+    .lt("payment_date", nextDayISO(fecha));
+
+  return (data || []).filter((p) => isPaidStatus(p.status));
+};
+
+const groupPaymentsByClient = ({ pagos, loansInTown, clientsInTown }) => {
+  const loanById = new Map((loansInTown || []).map((l) => [l.id, l]));
+  const clientById = new Map((clientsInTown || []).map((c) => [c.id, c]));
+
+  const byClient = new Map();
+
+  for (const p of pagos || []) {
+    const loan = loanById.get(p.loan_id);
+    if (!loan) continue;
+
+    const client = clientById.get(loan.client_id);
+    if (!client) continue;
+
+    const key = loan.client_id;
+
+    if (!byClient.has(key)) {
+      byClient.set(key, {
+        client_id: loan.client_id,
+        cliente: client.name || client.nombre || "(Sin nombre)",
+        poblacion: toStr(client.poblacion),
+        telefono: client.phone || client.telefono || "",
+        totalCliente: 0,
+        pagos: [],
+      });
+    }
+
+    const bucket = byClient.get(key);
+    bucket.totalCliente += Number(p.amount || 0);
+    bucket.pagos.push({
+      id: p.id,
+      loan_id: p.loan_id,
+      week: p.week || null,
+      amount: Number(p.amount || 0),
+    });
+  }
+
+  const groupedRows = Array.from(byClient.values()).sort((a, b) =>
+    a.cliente.localeCompare(b.cliente)
+  );
+  const grandTotal = groupedRows.reduce((acc, r) => acc + r.totalCliente, 0);
+
+  return { groupedRows, grandTotal };
 };
 
 export default function DailyCollections() {
@@ -42,184 +160,87 @@ export default function DailyCollections() {
 
   // 1) Catálogo de poblaciones desde clients
   useEffect(() => {
-    const setCat = new Set();
-    for (const c of clients) {
-      const p = toStr(c.poblacion);
-      if (p) setCat.add(p);
-    }
-    setPoblaciones(Array.from(setCat).sort((a, b) => a.localeCompare(b)));
+    const pobArr = uniqSorted((clients || []).map((c) => toStr(c.poblacion)));
+    setPoblaciones(pobArr);
   }, [clients]);
 
   // 2) Catálogos de rutas y grupos dependientes de la población seleccionada
   useEffect(() => {
-    // Base: solo por población (igual que antes), pero ahora
-    // "grupos" incluye también los grupos históricos de loans de esos clientes.
-    const source = poblacion
-      ? clients.filter((c) => toStr(c.poblacion) === poblacion)
-      : [];
+    const { rutasArr, gruposArr } = buildCatalogsFrom({ clients, loans, poblacion });
 
-    // Rutas desde clientes
-    const setR = new Set();
-    for (const c of source) {
-      const r = toStr(c.ruta);
-      if (r) setR.add(r);
-    }
-    const rutasArr = Array.from(setR).sort((a, b) => a.localeCompare(b));
     setRutas(rutasArr);
-
-    if (ruta && !rutasArr.includes(ruta)) setRuta("");
-
-    // Grupos = unión de grupos actuales (clientes) + grupos históricos de loans
-    const setG = new Set();
-    for (const c of source) {
-      const g = toStr(c.grupo);
-      if (g) setG.add(g);
-    }
-    const sourceIds = new Set(source.map((c) => c.id));
-    for (const l of loans || []) {
-      if (sourceIds.has(l.client_id)) {
-        const lg = toStr(l.grupo);
-        if (lg) setG.add(lg);
-      }
-    }
-    const gruposArr = Array.from(setG).sort((a, b) => a.localeCompare(b));
     setGrupos(gruposArr);
 
+    if (ruta && !rutasArr.includes(ruta)) setRuta("");
     if (grupo && !gruposArr.includes(grupo)) setGrupo("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [poblacion, ruta, clients, loans]);
+  }, [poblacion, clients, loans]);
 
-  // 3) Recalcular al cambiar filtros
-  useEffect(() => {
+  const clearReport = useCallback(() => {
+    setRows([]);
+    setTotalDia(0);
+  }, []);
+
+  const buildReport = useCallback(async () => {
     if (!poblacion || !fecha) {
-      setRows([]);
-      setTotalDia(0);
+      clearReport();
       return;
     }
-    buildReport();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [poblacion, ruta, grupo, fecha, clients, loans, payments]);
 
-  async function buildReport() {
     setLoading(true);
+
     try {
-      // 1) Clientes de esa población (y opcionalmente ruta)
-      let clientsInTown = clients.filter((c) => toStr(c.poblacion) === poblacion);
-      if (ruta) {
-        clientsInTown = clientsInTown.filter((c) => toStr(c.ruta) === ruta);
-      }
+      // 1) clientes
+      const clientsInTown = getClientsInTown({ clients, poblacion, ruta });
       const clientIds = clientsInTown.map((c) => c.id);
+
       if (!clientIds.length) {
-        setRows([]);
-        setTotalDia(0);
-        setLoading(false);
+        clearReport();
         return;
       }
 
-      // 2) Loans de esos clientes
-      let loansInTown = loans.filter((l) => clientIds.includes(l.client_id));
-      if (!loansInTown.length) {
-        const { data: supLoans } = await supabase
-          .from("loans")
-          .select("*")
-          .in("client_id", clientIds);
-        loansInTown = supLoans || [];
-      }
+      // 2) loans (local -> fallback supabase)
+      let loansInTown = getLoansForClientsLocal({ loans, clientIds });
+      if (!loansInTown.length) loansInTown = await fetchLoansForClients(clientIds);
 
-      // *** Cambio clave:
-      // Si hay filtro de "grupo", filtrar por el grupo del PRÉSTAMO (loan.grupo),
-      // no por el grupo actual del cliente.
-      if (grupo) {
-        loansInTown = loansInTown.filter((l) => toStr(l.grupo) === toStr(grupo));
-      }
+      loansInTown = filterLoansByGrupo({ loans: loansInTown, grupo });
 
-      const loanIds = loansInTown.map((l) => l.id);
+      const loanIds = (loansInTown || []).map((l) => l.id);
       if (!loanIds.length) {
-        setRows([]);
-        setTotalDia(0);
-        setLoading(false);
+        clearReport();
         return;
       }
 
-      // 3) Pagos "paid" de ese día para esos loans
-      const pagosLocal = (payments || []).filter((p) => {
-        if (!loanIds.includes(p.loan_id)) return false;
-        const st = (p.status || "").toLowerCase();
-        if (!(st === "paid" || st === "pagado")) return false;
-        // comparar por día (YYYY-MM-DD)
-        const d = (p.payment_date || "").slice(0, 10);
-        return d === fecha;
+      // 3) pagos (local -> fallback supabase)
+      let pagos = getPaidPaymentsLocal({ payments, loanIds, fecha });
+      if (!pagos.length) pagos = await fetchPaidPaymentsForDay({ loanIds, fecha });
+
+      if (!pagos.length) {
+        clearReport();
+        return;
+      }
+
+      // 4) agrupar
+      const { groupedRows, grandTotal } = groupPaymentsByClient({
+        pagos,
+        loansInTown,
+        clientsInTown,
       });
-
-      let pagos = pagosLocal;
-      if (!pagos.length) {
-        const { data: supPays } = await supabase
-          .from("payments")
-          .select("id, loan_id, amount, payment_date, status, week, created_at")
-          .in("loan_id", loanIds)
-          .gte("payment_date", startOfDayISO(fecha))
-          .lt("payment_date", nextDayISO(fecha));
-        pagos = (supPays || []).filter((p) => {
-          const st = (p.status || "").toLowerCase();
-          return st === "paid" || st === "pagado";
-        });
-      }
-
-      if (!pagos.length) {
-        setRows([]);
-        setTotalDia(0);
-        setLoading(false);
-        return;
-      }
-
-      // 4) Índices de apoyo
-      const loanById = new Map(loansInTown.map((l) => [l.id, l]));
-      const clientById = new Map(clientsInTown.map((c) => [c.id, c]));
-
-      // 5) Agrupar por cliente (suma por día)
-      const byClient = new Map();
-      for (const p of pagos) {
-        const loan = loanById.get(p.loan_id);
-        if (!loan) continue;
-        const client = clientById.get(loan.client_id);
-        if (!client) continue;
-
-        const key = loan.client_id;
-        if (!byClient.has(key)) {
-          byClient.set(key, {
-            client_id: loan.client_id,
-            cliente: client.name || client.nombre || "(Sin nombre)",
-            poblacion: toStr(client.poblacion),
-            telefono: client.phone || client.telefono || "",
-            totalCliente: 0,
-            pagos: [], // detalle de pagos del día
-          });
-        }
-        const bucket = byClient.get(key);
-        bucket.totalCliente += Number(p.amount || 0);
-        bucket.pagos.push({
-          id: p.id,
-          loan_id: p.loan_id,
-          week: p.week || null,
-          amount: Number(p.amount || 0),
-        });
-      }
-
-      const groupedRows = Array.from(byClient.values()).sort((a, b) =>
-        a.cliente.localeCompare(b.cliente)
-      );
-      const grandTotal = groupedRows.reduce((acc, r) => acc + r.totalCliente, 0);
 
       setRows(groupedRows);
       setTotalDia(grandTotal);
     } catch (e) {
       console.error("DailyCollections error:", e);
-      setRows([]);
-      setTotalDia(0);
+      clearReport();
     } finally {
       setLoading(false);
     }
-  }
+  }, [poblacion, ruta, grupo, fecha, clients, loans, payments, clearReport]);
+
+  // 3) Recalcular al cambiar filtros
+  useEffect(() => {
+    buildReport();
+  }, [buildReport]);
 
   const summary = useMemo(
     () => ({
@@ -385,7 +406,8 @@ export default function DailyCollections() {
 
       <p className="text-xs text-gray-500 mt-2">
         Se muestran pagos con estado <b>Pagado</b> del día seleccionado, para la población elegida
-        {ruta ? `, ruta ${ruta}` : ""}{grupo ? `, grupo ${grupo}` : ""}.
+        {ruta ? `, ruta ${ruta}` : ""}
+        {grupo ? `, grupo ${grupo}` : ""}.
       </p>
     </div>
   );
