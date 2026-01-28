@@ -1,5 +1,6 @@
 // src/pages/GroupSheet.jsx
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import PropTypes from "prop-types";
 import { useData } from "@/contexts/DataContext";
 import { supabase } from "@/lib/customSupabaseClient";
 import { parseTermWeeks, calcWeeklyPayment } from "@/lib/loanUtils";
@@ -459,6 +460,14 @@ export default function GroupSheet() {
 
   const printRef = useRef(null);
 
+  // Keys estables para columnas semanas (evita "Array index in keys")
+  const weekColKeysRef = useRef(null);
+  if (!weekColKeysRef.current) {
+    const keys = [];
+    for (let n = 1; n <= TOTAL_WEEKS; n++) keys.push(`wk-col-${String(n).padStart(2, "0")}`);
+    weekColKeysRef.current = keys;
+  }
+
   const waitForLogo = useCallback(() => waitForLogoLoaded(fincenLogoUrl), []);
 
   const handleDownloadPDF = useCallback(async () => {
@@ -760,7 +769,13 @@ export default function GroupSheet() {
           </div>
         </div>
 
-        <Table loading={loading} dataLoading={dataLoading} rows={rows} weekHeaders={weekHeaders} />
+        <Table
+          loading={loading}
+          dataLoading={dataLoading}
+          rows={rows}
+          weekHeaders={weekHeaders}
+          weekColKeys={weekColKeysRef.current}
+        />
 
         <div
           className="sum-pagos"
@@ -795,11 +810,20 @@ function Filters({
   setSearch,
   dataLoading,
 }) {
+  const poblacionId = "gs-poblacion";
+  const rutaId = "gs-ruta";
+  const grupoId = "gs-grupo";
+  const startDateId = "gs-startDate";
+  const searchId = "gs-search";
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-4 no-print">
       <div className="col-span-1">
-        <label className="block text-sm mb-1">Población</label>
+        <label htmlFor={poblacionId} className="block text-sm mb-1">
+          Población
+        </label>
         <select
+          id={poblacionId}
           className="w-full border rounded-md px-3 py-2"
           value={poblacion}
           onChange={(e) => setPoblacion(e.target.value)}
@@ -807,7 +831,7 @@ function Filters({
         >
           <option value="">Seleccionar…</option>
           {poblaciones.map((p) => (
-            <option key={p} value={p}>
+            <option key={`pob-${p}`} value={p}>
               {p}
             </option>
           ))}
@@ -815,8 +839,11 @@ function Filters({
       </div>
 
       <div className="col-span-1">
-        <label className="block text-sm mb-1">Ruta</label>
+        <label htmlFor={rutaId} className="block text-sm mb-1">
+          Ruta
+        </label>
         <select
+          id={rutaId}
           className="w-full border rounded-md px-3 py-2"
           value={ruta}
           onChange={(e) => setRuta(e.target.value)}
@@ -824,7 +851,7 @@ function Filters({
         >
           <option value="">Todas</option>
           {rutas.map((r) => (
-            <option key={r} value={r}>
+            <option key={`ruta-${r}`} value={r}>
               {r}
             </option>
           ))}
@@ -832,8 +859,11 @@ function Filters({
       </div>
 
       <div className="col-span-1">
-        <label className="block text-sm mb-1">Grupo</label>
+        <label htmlFor={grupoId} className="block text-sm mb-1">
+          Grupo
+        </label>
         <select
+          id={grupoId}
           className="w-full border rounded-md px-3 py-2"
           value={grupo}
           onChange={(e) => setGrupo(e.target.value)}
@@ -841,7 +871,7 @@ function Filters({
         >
           <option value="">Todos</option>
           {grupos.map((g) => (
-            <option key={g} value={g}>
+            <option key={`grp-${g}`} value={g}>
               {g}
             </option>
           ))}
@@ -849,8 +879,11 @@ function Filters({
       </div>
 
       <div className="col-span-1">
-        <label className="block text-sm mb-1">Fecha inicio (S1)</label>
+        <label htmlFor={startDateId} className="block text-sm mb-1">
+          Fecha inicio (S1)
+        </label>
         <input
+          id={startDateId}
           type="date"
           className="w-full border rounded-md px-3 py-2"
           value={startDate ? toDateInput(startDate) : ""}
@@ -860,8 +893,11 @@ function Filters({
       </div>
 
       <div className="col-span-1">
-        <label className="block text-sm mb-1">Buscar</label>
+        <label htmlFor={searchId} className="block text-sm mb-1">
+          Buscar
+        </label>
         <input
+          id={searchId}
           className="w-full border rounded-md px-3 py-2"
           placeholder="cliente, aval, dirección…"
           value={search}
@@ -872,6 +908,23 @@ function Filters({
     </div>
   );
 }
+
+Filters.propTypes = {
+  poblaciones: PropTypes.arrayOf(PropTypes.string).isRequired,
+  rutas: PropTypes.arrayOf(PropTypes.string).isRequired,
+  grupos: PropTypes.arrayOf(PropTypes.string).isRequired,
+  poblacion: PropTypes.string.isRequired,
+  ruta: PropTypes.string.isRequired,
+  grupo: PropTypes.string.isRequired,
+  startDate: PropTypes.oneOfType([PropTypes.string, PropTypes.instanceOf(Date)]).isRequired,
+  search: PropTypes.string.isRequired,
+  setPoblacion: PropTypes.func.isRequired,
+  setRuta: PropTypes.func.isRequired,
+  setGrupo: PropTypes.func.isRequired,
+  setStartDate: PropTypes.func.isRequired,
+  setSearch: PropTypes.func.isRequired,
+  dataLoading: PropTypes.bool.isRequired,
+};
 
 /* ==============================
    Refactor Table (reduce nesting)
@@ -885,29 +938,67 @@ function WeekHeaderCell({ w }) {
   );
 }
 
-function WeekEmptyCells({ count }) {
-  return Array.from({ length: count }).map((_, i) => (
-    <td key={i} className="gs-td gs-week-td border align-top">
+WeekHeaderCell.propTypes = {
+  w: PropTypes.shape({
+    label: PropTypes.string.isRequired,
+    date: PropTypes.string.isRequired,
+    index: PropTypes.number.isRequired,
+  }).isRequired,
+};
+
+function WeekEmptyCells({ weekHeaders }) {
+  return weekHeaders.map((w) => (
+    <td key={`wk-empty-${w.index}`} className="gs-td gs-week-td border align-top">
       <div className="week-box" />
     </td>
   ));
 }
 
+WeekEmptyCells.propTypes = {
+  weekHeaders: PropTypes.arrayOf(
+    PropTypes.shape({
+      index: PropTypes.number.isRequired,
+      label: PropTypes.string,
+      date: PropTypes.string,
+    })
+  ).isRequired,
+};
+
+const keyFromText = (s) => `k-${toStr(s).toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-_]/g, "")}`;
+
 function GuaranteesList({ text }) {
   if (!text) return null;
-  const items = text.split(" • ");
+
+  const raw = text.split(" • ").map((x) => toStr(x)).filter(Boolean);
+  const counts = new Map();
+
+  const items = raw.map((g) => {
+    const base = keyFromText(g) || "k-empty";
+    const n = (counts.get(base) || 0) + 1;
+    counts.set(base, n);
+    return { g, key: `${base}-${n}` };
+  });
+
   return (
     <ul className="list-disc pl-4">
-      {items.map((g, i) => (
-        <li key={i} className="micro">
-          {g}
+      {items.map((it) => (
+        <li key={it.key} className="micro">
+          {it.g}
         </li>
       ))}
     </ul>
   );
 }
 
-function DataRow({ r, weekCount }) {
+GuaranteesList.propTypes = {
+  text: PropTypes.string,
+};
+
+GuaranteesList.defaultProps = {
+  text: "",
+};
+
+function DataRow({ r, weekHeaders }) {
   return (
     <tr className="row-pad">
       <td className="gs-td border text-center align-top">
@@ -936,19 +1027,41 @@ function DataRow({ r, weekCount }) {
         </div>
       </td>
       <td className="gs-td border text-right align-top">
-        <div className="cell mini">${r.prestamo.toLocaleString("es-MX")}</div>
+        <div className="cell mini">${Number(r.prestamo || 0).toLocaleString("es-MX")}</div>
       </td>
       <td className="gs-td border text-right align-top">
-        <div className="cell mini">${r.pagoSemanal.toLocaleString("es-MX")}</div>
+        <div className="cell mini">${Number(r.pagoSemanal || 0).toLocaleString("es-MX")}</div>
       </td>
 
-      <WeekEmptyCells count={weekCount} />
+      <WeekEmptyCells weekHeaders={weekHeaders} />
     </tr>
   );
 }
 
-function renderTableBody({ loading, dataLoading, rows, weekCount }) {
-  const colSpan = 9 + weekCount;
+DataRow.propTypes = {
+  r: PropTypes.shape({
+    key: PropTypes.string.isRequired,
+    no: PropTypes.number.isRequired,
+    loanId: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
+    cliente: PropTypes.string.isRequired,
+    domicilio: PropTypes.string,
+    aval: PropTypes.string,
+    domicilioAval: PropTypes.string,
+    garantias: PropTypes.string,
+    prestamo: PropTypes.oneOfType([PropTypes.number, PropTypes.string]).isRequired,
+    pagoSemanal: PropTypes.oneOfType([PropTypes.number, PropTypes.string]).isRequired,
+  }).isRequired,
+  weekHeaders: PropTypes.arrayOf(
+    PropTypes.shape({
+      index: PropTypes.number.isRequired,
+      label: PropTypes.string.isRequired,
+      date: PropTypes.string.isRequired,
+    })
+  ).isRequired,
+};
+
+function renderTableBody({ loading, dataLoading, rows, weekHeaders }) {
+  const colSpan = 9 + weekHeaders.length;
 
   if (loading || dataLoading) {
     return (
@@ -970,10 +1083,10 @@ function renderTableBody({ loading, dataLoading, rows, weekCount }) {
     );
   }
 
-  return rows.map((r) => <DataRow key={r.key} r={r} weekCount={weekCount} />);
+  return rows.map((r) => <DataRow key={r.key} r={r} weekHeaders={weekHeaders} />);
 }
 
-function Table({ loading, dataLoading, rows, weekHeaders }) {
+function Table({ loading, dataLoading, rows, weekHeaders, weekColKeys }) {
   const weekCount = weekHeaders.length;
 
   return (
@@ -988,8 +1101,9 @@ function Table({ loading, dataLoading, rows, weekHeaders }) {
         <col style={{ width: "6.2%" }} />
         <col style={{ width: "3%" }} />
         <col style={{ width: "2.5%" }} />
-        {Array.from({ length: TOTAL_WEEKS }).map((_, i) => (
-          <col key={i} style={{ width: "calc(55% / 15)" }} />
+
+        {weekColKeys.map((k) => (
+          <col key={k} style={{ width: "calc(55% / 15)" }} />
         ))}
       </colgroup>
 
@@ -1006,12 +1120,35 @@ function Table({ loading, dataLoading, rows, weekHeaders }) {
           <th className="gs-th border mini">Pagos</th>
 
           {weekHeaders.map((w) => (
-            <WeekHeaderCell key={w.index} w={w} />
+            <WeekHeaderCell key={`wk-head-${w.index}`} w={w} />
           ))}
         </tr>
       </thead>
 
-      <tbody>{renderTableBody({ loading, dataLoading, rows, weekCount })}</tbody>
+      <tbody>{renderTableBody({ loading, dataLoading, rows, weekHeaders })}</tbody>
     </table>
   );
 }
+
+Table.propTypes = {
+  loading: PropTypes.bool.isRequired,
+  dataLoading: PropTypes.bool.isRequired,
+  rows: PropTypes.arrayOf(
+    PropTypes.shape({
+      key: PropTypes.string.isRequired,
+      no: PropTypes.number.isRequired,
+      loanId: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
+      cliente: PropTypes.string.isRequired,
+      prestamo: PropTypes.oneOfType([PropTypes.number, PropTypes.string]).isRequired,
+      pagoSemanal: PropTypes.oneOfType([PropTypes.number, PropTypes.string]).isRequired,
+    })
+  ).isRequired,
+  weekHeaders: PropTypes.arrayOf(
+    PropTypes.shape({
+      label: PropTypes.string.isRequired,
+      date: PropTypes.string.isRequired,
+      index: PropTypes.number.isRequired,
+    })
+  ).isRequired,
+  weekColKeys: PropTypes.arrayOf(PropTypes.string).isRequired,
+};
