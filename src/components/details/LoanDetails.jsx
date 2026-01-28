@@ -1,68 +1,70 @@
 // src/components/details/LoanDetails.jsx
-import React, { useMemo, useState, useEffect } from 'react';
-import { Label } from '@/components/ui/label';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { toast } from '@/components/ui/use-toast';
-import { supabase } from '@/lib/customSupabaseClient';
-import { useData } from '@/contexts/DataContext';
-import { addDaysISO } from '@/lib/loanUtils';
+import React, { useMemo, useState, useEffect } from "react";
+import PropTypes from "prop-types";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { toast } from "@/components/ui/use-toast";
+import { supabase } from "@/lib/customSupabaseClient";
+import { useData } from "@/contexts/DataContext";
+import { addDaysISO } from "@/lib/loanUtils";
 
 // ---------- helpers ----------
 const num = (v) => {
   if (v === null || v === undefined) return 0;
-  const n = Number(String(v).replace(/[^\d.-]/g, ''));
+  // Sonar: prefer replaceAll over replace
+  const n = Number(String(v).replaceAll(/[^\d.-]/g, ""));
   return Number.isFinite(n) ? n : 0;
 };
 
 const money = (v) =>
-  num(v).toLocaleString('es-MX', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  num(v).toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
 /** Muestra fechas ISO (YYYY-MM-DD) sin perder un día por huso horario */
 const safeDate = (v) => {
-  if (!v) return '—';
+  if (!v) return "—";
   const s = String(v);
-  const d = new Date(s.includes('T') ? s : `${s}T00:00:00`);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('es-MX');
+  const d = new Date(s.includes("T") ? s : `${s}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("es-MX");
 };
 
 /** Para <input type="date"> desde ISO/local */
 const toDateInput = (v) => {
-  if (!v) return '';
+  if (!v) return "";
   const s = String(v);
-  const d = new Date(s.includes('T') ? s : `${s}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return '';
+  const d = new Date(s.includes("T") ? s : `${s}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return "";
   const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 };
 
 const getStatusInfo = (status) => {
-  switch ((status || '').toLowerCase()) {
-    case 'active':
-      return { text: 'Activo', color: 'bg-green-100 text-green-800' };
-    case 'completed':
-      return { text: 'Completado', color: 'bg-blue-100 text-blue-800' };
-    case 'overdue':
-      return { text: 'Vencido', color: 'bg-red-100 text-red-800' };
+  switch ((status || "").toLowerCase()) {
+    case "active":
+      return { text: "Activo", color: "bg-green-100 text-green-800" };
+    case "completed":
+      return { text: "Completado", color: "bg-blue-100 text-blue-800" };
+    case "overdue":
+      return { text: "Vencido", color: "bg-red-100 text-red-800" };
     default:
-      return { text: 'Desconocido', color: 'bg-gray-100 text-gray-800' };
+      return { text: "Desconocido", color: "bg-gray-100 text-gray-800" };
   }
 };
 // --------------------------------
 
 const LoanDetails = ({ loan }) => {
-  const { refreshData } = useData();
+  const { refreshData } = useData() || {};
 
   // ✅ Hooks siempre arriba (aunque loan venga null al principio)
   const [liveClientName, setLiveClientName] = useState(null);
-  const [newStart, setNewStart] = useState('');
+  const [newStart, setNewStart] = useState("");
   const [saving, setSaving] = useState(false);
 
   // Memo del ISO inicial (si no hay loan, queda '')
   const initialStartISO = useMemo(() => {
-    if (!loan) return '';
+    if (!loan) return "";
     return toDateInput(loan.start_date ?? loan.startDate ?? loan.date);
   }, [loan?.start_date, loan?.startDate, loan?.date, loan]);
 
@@ -87,11 +89,7 @@ const LoanDetails = ({ loan }) => {
         return;
       }
 
-      const { data, error } = await supabase
-        .from('clients')
-        .select('name')
-        .eq('id', cid)
-        .single();
+      const { data, error } = await supabase.from("clients").select("name").eq("id", cid).single();
 
       if (!cancelled) {
         if (!error && data?.name) setLiveClientName(data.name);
@@ -112,7 +110,7 @@ const LoanDetails = ({ loan }) => {
   const statusInfo = getStatusInfo(loan.status);
 
   // 🔹 Si existe nombre vivo, úsalo; si no, usa el que venga en loan
-  const displayClientName = liveClientName ?? loan.client_name ?? '—';
+  const displayClientName = liveClientName ?? loan.client_name ?? "—";
 
   // Reglas por defecto
   const interestRate = num(loan.interest_rate ?? 40);
@@ -125,12 +123,9 @@ const LoanDetails = ({ loan }) => {
       : num(loan.amount ?? loan.principal) * (1 + interestRate / 100);
 
   // Neto entregado (lo que recibió en mano)
-  const inferredNet =
-    interestRate >= 0 ? Math.round(totalCycle / (1 + interestRate / 100)) : totalCycle;
+  const inferredNet = interestRate >= 0 ? Math.round(totalCycle / (1 + interestRate / 100)) : totalCycle;
 
-  const netDisbursed = num(
-    loan.net_disbursed ?? loan.monto_entregado ?? loan.entregado ?? inferredNet
-  );
+  const netDisbursed = num(loan.net_disbursed ?? loan.monto_entregado ?? loan.entregado ?? inferredNet);
 
   // Arrastre (saldo anterior descontado al crear el préstamo nuevo)
   const carried = num(loan.carried_balance ?? loan.arrastre ?? 0);
@@ -139,12 +134,15 @@ const LoanDetails = ({ loan }) => {
   const paid = (() => {
     const v1 = num(loan.paid_amount);
     if (v1 > 0) return v1;
+
     const v2 = num(loan.total_paid);
     if (v2 > 0) return v2;
+
     const rem =
       loan.remaining_balance !== undefined && loan.remaining_balance !== null
         ? num(loan.remaining_balance)
         : null;
+
     if (rem !== null) return Math.max(totalCycle - rem, 0);
     return 0;
   })();
@@ -153,15 +151,13 @@ const LoanDetails = ({ loan }) => {
   const remaining = Math.max(totalCycle - paid, 0);
 
   // Pago semanal (si no viene, se deriva del total / semanas)
-  const weeklyPayment =
-    num(loan.weekly_payment) || (termWeeks > 0 ? Math.ceil(totalCycle / termWeeks) : 0);
+  const weeklyPayment = num(loan.weekly_payment) || (termWeeks > 0 ? Math.ceil(totalCycle / termWeeks) : 0);
 
   // Progreso
   const progress = totalCycle > 0 ? Math.min((paid / totalCycle) * 100, 100) : 0;
 
   // === Semanas pagadas / restantes — SOLO por MONTO (floor) ===
-  const weeksPaid =
-    weeklyPayment > 0 ? Math.min(termWeeks, Math.floor(paid / weeklyPayment)) : 0;
+  const weeksPaid = weeklyPayment > 0 ? Math.min(termWeeks, Math.floor(paid / weeklyPayment)) : 0;
 
   const weeksRemaining = Math.max(0, termWeeks - weeksPaid);
 
@@ -170,9 +166,7 @@ const LoanDetails = ({ loan }) => {
 
   // Fechas (mostrar exactamente lo guardado)
   const startDateText = safeDate(loan.start_date ?? loan.startDate ?? loan.date);
-  const nextPaymentDateText = safeDate(
-    loan.next_payment_date ?? loan.nextDueDate ?? loan.due_date_next
-  );
+  const nextPaymentDateText = safeDate(loan.next_payment_date ?? loan.nextDueDate ?? loan.due_date_next);
 
   const canSave = !!newStart && newStart !== initialStartISO;
 
@@ -187,30 +181,30 @@ const LoanDetails = ({ loan }) => {
       const dueISO = addDaysISO(startISO, termWeeks * 7);
 
       const { error } = await supabase
-        .from('loans')
+        .from("loans")
         .update({
           start_date: startISO,
           next_payment_date: nextISO,
           due_date: dueISO,
         })
-        .eq('id', loan.id);
+        .eq("id", loan.id);
 
       if (error) throw error;
 
       toast({
-        title: 'Fecha de inicio actualizada',
-        description: `Inicio: ${safeDate(startISO)} · Próx. pago: ${safeDate(
-          nextISO
-        )} · Vence: ${safeDate(dueISO)}`,
+        title: "Fecha de inicio actualizada",
+        description: `Inicio: ${safeDate(startISO)} · Próx. pago: ${safeDate(nextISO)} · Vence: ${safeDate(
+          dueISO
+        )}`,
       });
 
       await refreshData?.();
     } catch (err) {
-      console.error('Actualizar fecha de inicio', err);
+      console.error("Actualizar fecha de inicio", err);
       toast({
-        variant: 'destructive',
-        title: 'No se pudo guardar',
-        description: err?.message || 'Inténtalo nuevamente.',
+        variant: "destructive",
+        title: "No se pudo guardar",
+        description: err?.message || "Inténtalo nuevamente.",
       });
     } finally {
       setSaving(false);
@@ -245,9 +239,7 @@ const LoanDetails = ({ loan }) => {
           <Label className="text-sm font-medium text-gray-600">Monto entregado</Label>
           <p className="text-gray-900 font-semibold">${money(netDisbursed)}</p>
           {carried > 0 && (
-            <p className="text-xs text-muted-foreground mt-1">
-              Incluye arrastre descontado: ${money(carried)}
-            </p>
+            <p className="text-xs text-muted-foreground mt-1">Incluye arrastre descontado: ${money(carried)}</p>
           )}
         </div>
         <div>
@@ -294,9 +286,7 @@ const LoanDetails = ({ loan }) => {
       {/* Crédito acumulado y semanas restantes */}
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <Label className="text-sm font-medium text-gray-600">
-            Crédito aplicado a próxima semana
-          </Label>
+          <Label className="text-sm font-medium text-gray-600">Crédito aplicado a próxima semana</Label>
           <p className="text-gray-900 font-semibold">${money(rolloverCredit)}</p>
         </div>
         <div>
@@ -319,14 +309,11 @@ const LoanDetails = ({ loan }) => {
       {/* ===== Editor: cambiar fecha de inicio ===== */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end p-3 border rounded-lg">
         <div className="md:col-span-2 space-y-2">
-          <Label className="text-sm font-medium text-gray-600">
-            Cambiar fecha de inicio del préstamo
-          </Label>
+          <Label className="text-sm font-medium text-gray-600">Cambiar fecha de inicio del préstamo</Label>
           <Input type="date" value={newStart} onChange={(e) => setNewStart(e.target.value)} />
           <p className="text-xs text-muted-foreground">
-            Al guardar se recalcularán el <b>próximo pago (+7 días)</b> y la{' '}
-            <b>fecha de vencimiento (+{termWeeks} semanas)</b>. No se modifican saldos ni
-            pagos.
+            Al guardar se recalcularán el <b>próximo pago (+7 días)</b> y la{" "}
+            <b>fecha de vencimiento (+{termWeeks} semanas)</b>. No se modifican saldos ni pagos.
           </p>
         </div>
         <div className="flex gap-2 md:justify-end">
@@ -339,7 +326,7 @@ const LoanDetails = ({ loan }) => {
             Deshacer
           </Button>
           <Button type="button" onClick={handleSaveStartDate} disabled={!canSave || saving}>
-            {saving ? 'Guardando…' : 'Guardar cambio'}
+            {saving ? "Guardando…" : "Guardar cambio"}
           </Button>
         </div>
       </div>
@@ -356,6 +343,54 @@ const LoanDetails = ({ loan }) => {
       </div>
     </div>
   );
+};
+
+LoanDetails.propTypes = {
+  loan: PropTypes.shape({
+    // ids/relaciones
+    id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+    client_id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+    clientId: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+    cliente_id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+    client_name: PropTypes.string,
+
+    // status / fechas
+    status: PropTypes.string,
+    start_date: PropTypes.oneOfType([PropTypes.string, PropTypes.instanceOf(Date)]),
+    startDate: PropTypes.oneOfType([PropTypes.string, PropTypes.instanceOf(Date)]),
+    date: PropTypes.oneOfType([PropTypes.string, PropTypes.instanceOf(Date)]),
+    next_payment_date: PropTypes.oneOfType([PropTypes.string, PropTypes.instanceOf(Date)]),
+    nextDueDate: PropTypes.oneOfType([PropTypes.string, PropTypes.instanceOf(Date)]),
+    due_date_next: PropTypes.oneOfType([PropTypes.string, PropTypes.instanceOf(Date)]),
+    due_date: PropTypes.oneOfType([PropTypes.string, PropTypes.instanceOf(Date)]),
+
+    // montos / reglas
+    interest_rate: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    term_weeks: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    term: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    weeks: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+
+    total_amount: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    amount: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    principal: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+
+    net_disbursed: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    monto_entregado: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    entregado: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+
+    carried_balance: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    arrastre: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+
+    paid_amount: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    total_paid: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    remaining_balance: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+
+    weekly_payment: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+  }),
+};
+
+LoanDetails.defaultProps = {
+  loan: null,
 };
 
 export default LoanDetails;
