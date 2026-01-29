@@ -143,6 +143,48 @@ async function backfillHistoricLoanGroups({ clientId, oldGrupo, loans, updateLoa
 }
 
 /* ==========================
+   Helpers para LoanItem (baja Cognitive Complexity)
+========================== */
+const parseWeeksFromTerm = (term) => {
+  if (!term) return undefined;
+  const m = /\d+/.exec(String(term));
+  return m ? Number(m[0]) : undefined;
+};
+
+const resolveWeeksAndPlazoTxt = (loan) => {
+  const weeksFromTerm = parseWeeksFromTerm(loan?.term);
+  const weeks = loan?.term_weeks ?? weeksFromTerm ?? DEFAULT_WEEKS;
+  const plazoTxt = loan?.term ? loan.term : `${weeks} semanas`;
+  return { weeks, plazoTxt };
+};
+
+const resolveLoanGrupo = ({ loan, clientGrupo, isActive }) => {
+  const loanGrupoStr = loan?.grupo != null ? String(loan.grupo).trim() : '';
+  if (loanGrupoStr) return loanGrupoStr;
+  if (isActive) return clientGrupo || 'Sin especificar';
+  return 'Sin especificar';
+};
+
+const resolveRate = ({ loan, amount }) => {
+  let rate = loan?.interest_rate;
+  const hasRate = rate !== undefined && rate !== null;
+  if (hasRate) return rate;
+
+  if (loan?.interest_amount != null && amount) {
+    const pct = (Number(loan.interest_amount) / amount) * 100;
+    if (Number.isFinite(pct)) return Math.round(pct);
+  }
+
+  return DEFAULT_RATE;
+};
+
+const resolveDueISO = ({ loan, startISO, weeks }) => {
+  if (loan?.due_date != null) return loan.due_date;
+  if (!startISO) return null;
+  return addDays(startISO, weeks * 7 - 1);
+};
+
+/* ==========================
    Card de cada préstamo
 ========================== */
 const LoanItem = ({ loan, clientGrupo, isAdmin, onEdit }) => {
@@ -150,43 +192,19 @@ const LoanItem = ({ loan, clientGrupo, isAdmin, onEdit }) => {
   const startISO = loan.start_date || loan.fecha;
   const startTxt = fmtDate(startISO);
 
-  // ✅ Sonar: RegExp.exec en vez de match()
-  let weeksFromTerm;
-  if (loan.term) {
-    const m = /\d+/.exec(String(loan.term));
-    weeksFromTerm = m ? Number(m[0]) : undefined;
-  }
-
-  const weeks = loan.term_weeks ?? weeksFromTerm ?? DEFAULT_WEEKS;
-  const plazoTxt = loan.term ? loan.term : `${weeks} semanas`;
+  const { weeks, plazoTxt } = resolveWeeksAndPlazoTxt(loan);
 
   const st = String(loan.status || loan.estado_prestamo || '').toLowerCase();
   const isActive = st === 'active';
 
-  // ✅ sin ternario anidado
-  const loanGrupoStr = loan.grupo != null ? String(loan.grupo).trim() : '';
-  let grupo = 'Sin especificar';
-  if (loanGrupoStr) {
-    grupo = loanGrupoStr;
-  } else if (isActive) {
-    grupo = clientGrupo || 'Sin especificar';
-  }
+  const grupo = resolveLoanGrupo({ loan, clientGrupo, isActive });
 
-  // ✅ default assignment sin ternario raro
-  let rate = loan.interest_rate;
-  const hasRate = rate !== undefined && rate !== null;
-
-  if (!hasRate && loan.interest_amount != null && amount) {
-    const pct = (Number(loan.interest_amount) / amount) * 100;
-    if (Number.isFinite(pct)) rate = Math.round(pct);
-  }
-
-  if (rate === undefined || rate === null) rate = DEFAULT_RATE;
-
+  const rate = resolveRate({ loan, amount });
   const interesTxt = `${rate}%`;
+
   const weekly = loan.weekly_payment ?? calcFlat({ amount, ratePercent: rate, weeks }).weekly;
 
-  const dueISO = loan.due_date ?? (startISO ? addDays(startISO, weeks * 7 - 1) : null);
+  const dueISO = resolveDueISO({ loan, startISO, weeks });
   const dueTxt = fmtDate(dueISO);
 
   return (
@@ -259,10 +277,18 @@ const PreviewEditedTotals = ({ amount, rate, weeks, alreadyPaid }) => {
   return (
     <div className="rounded-md border p-3 bg-slate-50 text-sm">
       <div className="flex flex-wrap gap-4">
-        <div><span className="text-muted-foreground">Interés:</span> <b>${toMoney(interest)}</b></div>
-        <div><span className="text-muted-foreground">Total con interés:</span> <b>${toMoney(total)}</b></div>
-        <div><span className="text-muted-foreground">Semanal:</span> <b>${toMoney(weekly)}</b></div>
-        <div><span className="text-muted-foreground">Pagado:</span> <b>${toMoney(alreadyPaid || 0)}</b></div>
+        <div>
+          <span className="text-muted-foreground">Interés:</span> <b>${toMoney(interest)}</b>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Total con interés:</span> <b>${toMoney(total)}</b>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Semanal:</span> <b>${toMoney(weekly)}</b>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Pagado:</span> <b>${toMoney(alreadyPaid || 0)}</b>
+        </div>
         <div>
           <span className="text-muted-foreground">Saldo:</span>{' '}
           <b className={willComplete ? 'text-emerald-600' : ''}>${toMoney(remaining)}</b>
@@ -299,8 +325,16 @@ const ClientFile = () => {
   const navigate = useNavigate();
 
   const {
-    clients, loans, guarantees, payments,
-    loading, updateClient, addLoan, updateLoan, addPayment, refreshData
+    clients,
+    loans,
+    guarantees,
+    payments,
+    loading,
+    updateClient,
+    addLoan,
+    updateLoan,
+    addPayment,
+    refreshData,
   } = useData();
 
   const { isAdmin } = useAuth();
@@ -336,15 +370,9 @@ const ClientFile = () => {
     [guarantees, clientId]
   );
 
-  const derivedStatus = useMemo(
-    () => getClientDerivedStatus(client, clientLoans),
-    [client, clientLoans]
-  );
+  const derivedStatus = useMemo(() => getClientDerivedStatus(client, clientLoans), [client, clientLoans]);
 
-  const clientWithDerived = useMemo(
-    () => (client ? { ...client, status: derivedStatus } : null),
-    [client, derivedStatus]
-  );
+  const clientWithDerived = useMemo(() => (client ? { ...client, status: derivedStatus } : null), [client, derivedStatus]);
 
   // regla: un solo préstamo ACTIVO
   const isActiveLoan = (l) => {
@@ -381,11 +409,7 @@ const ClientFile = () => {
     const fetchAval = async () => {
       if (!client) return;
       setIsDataLoading(true);
-      const { data } = await supabase
-        .from('avales')
-        .select('*')
-        .eq('client_id', client.id)
-        .maybeSingle();
+      const { data } = await supabase.from('avales').select('*').eq('client_id', client.id).maybeSingle();
       setAval(data || null);
       setIsDataLoading(false);
     };
@@ -499,7 +523,11 @@ const ClientFile = () => {
         return;
       }
       if (deliver <= 0) {
-        toast({ variant: 'destructive', title: 'No hay monto a entregar', description: 'El saldo pendiente es mayor o igual al solicitado.' });
+        toast({
+          variant: 'destructive',
+          title: 'No hay monto a entregar',
+          description: 'El saldo pendiente es mayor o igual al solicitado.',
+        });
         return;
       }
 
@@ -548,7 +576,10 @@ const ClientFile = () => {
 
       setIsRenewOpen(false);
       setRenewLoan(null);
-      toast({ title: 'Renovación completada', description: `Se entregan $${toMoney(deliver)}; el saldo anterior fue liquidado.` });
+      toast({
+        title: 'Renovación completada',
+        description: `Se entregan $${toMoney(deliver)}; el saldo anterior fue liquidado.`,
+      });
       await refreshData();
     } catch (error) {
       toast({ variant: 'destructive', title: 'Error en renovación', description: error.message });
@@ -596,7 +627,7 @@ const ClientFile = () => {
       const newStatus = remaining <= 0 ? 'completed' : 'active';
 
       const startISO = loanToEdit.start_date ?? null;
-      const due_date = startISO ? addDaysISO(startISO, weeks * 7 - 1) : (loanToEdit.due_date ?? null);
+      const due_date = startISO ? addDaysISO(startISO, weeks * 7 - 1) : loanToEdit.due_date ?? null;
 
       await updateLoan(loanToEdit.id, {
         amount: base,
@@ -636,14 +667,9 @@ const ClientFile = () => {
     }
   };
 
-  const remainingForActive =
-    activeLoan
-      ? Math.max(
-          num(activeLoan.total_amount ?? activeLoan.amount) -
-            num(activeLoan.total_paid ?? activeLoan.paid_amount),
-          0
-        )
-      : 0;
+  const remainingForActive = activeLoan
+    ? Math.max(num(activeLoan.total_amount ?? activeLoan.amount) - num(activeLoan.total_paid ?? activeLoan.paid_amount), 0)
+    : 0;
 
   // ids accesibles
   const idMontoSolicitado = 'renew_requested_amount';
@@ -711,9 +737,7 @@ const ClientFile = () => {
                     <CardDescription>
                       Préstamos asociados a este cliente.
                       {hasActiveLoan && (
-                        <span className="ml-2 text-emerald-700 font-medium">
-                          Actualmente tiene 1 préstamo activo.
-                        </span>
+                        <span className="ml-2 text-emerald-700 font-medium">Actualmente tiene 1 préstamo activo.</span>
                       )}
                     </CardDescription>
                   </div>
@@ -724,11 +748,7 @@ const ClientFile = () => {
                       size="sm"
                       onClick={openRenewDialog}
                       disabled={!renewable}
-                      title={
-                        renewable
-                          ? 'Renovar préstamo (desde semana 10)'
-                          : 'Renovación disponible a partir de la semana 10'
-                      }
+                      title={renewable ? 'Renovar préstamo (desde semana 10)' : 'Renovación disponible a partir de la semana 10'}
                     >
                       <RefreshCw className="mr-2 h-4 w-4" />
                       Renovar
@@ -807,11 +827,7 @@ const ClientFile = () => {
       {/* Modals */}
       <Dialog open={isEditingClient} onOpenChange={setIsEditingClient}>
         <DialogContent>
-          <ClientForm
-            client={clientWithDerived}
-            onSubmit={handleUpdateClient}
-            onCancel={() => setIsEditingClient(false)}
-          />
+          <ClientForm client={clientWithDerived} onSubmit={handleUpdateClient} onCancel={() => setIsEditingClient(false)} />
         </DialogContent>
       </Dialog>
 
@@ -850,7 +866,7 @@ const ClientFile = () => {
                   Saldo pendiente actual
                 </label>
                 <div id="renew_saldo" className="font-semibold text-orange-600">
-                  ${toMoney(renewLoan ? (renewLoan._remaining ?? renewLoan.remaining_balance) : remainingForActive)}
+                  ${toMoney(renewLoan ? renewLoan._remaining ?? renewLoan.remaining_balance : remainingForActive)}
                 </div>
               </div>
 
@@ -877,7 +893,9 @@ const ClientFile = () => {
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setIsRenewOpen(false)}>Cancelar</Button>
+              <Button variant="ghost" onClick={() => setIsRenewOpen(false)}>
+                Cancelar
+              </Button>
               <Button onClick={confirmRenew}>Confirmar renovación</Button>
             </div>
           </div>
@@ -958,7 +976,9 @@ const ClientFile = () => {
             )}
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setIsEditLoanOpen(false)}>Cancelar</Button>
+              <Button variant="ghost" onClick={() => setIsEditLoanOpen(false)}>
+                Cancelar
+              </Button>
               <Button onClick={confirmEditLoan}>Guardar cambios</Button>
             </div>
           </div>
