@@ -10,12 +10,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
 
 /* ==================== Utils ==================== */
@@ -132,6 +126,9 @@ const shouldBlockNewPaymentByWeek = ({ payment, weekToSave, occupiedWeeks }) => 
 /* ======================================================= */
 
 const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMessage }) => {
+  const safeLoans = useMemo(() => (Array.isArray(loans) ? loans : []), [loans]);
+  const safePayments = useMemo(() => (Array.isArray(payments) ? payments : []), [payments]);
+
   const [formData, setFormData] = useState({
     loan_id: '',
     client_name: '',
@@ -143,8 +140,8 @@ const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMess
   const loanId = useMemo(() => parseInt(formData.loan_id || '0', 10), [formData.loan_id]);
 
   const selectedLoan = useMemo(
-    () => loans.find((l) => l.id === loanId) || null,
-    [loans, loanId]
+    () => safeLoans.find((l) => l.id === loanId) || null,
+    [safeLoans, loanId]
   );
 
   // term_weeks dinámico del préstamo seleccionado
@@ -152,8 +149,8 @@ const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMess
 
   // pagos del préstamo seleccionado
   const loanPays = useMemo(
-    () => (payments || []).filter((p) => p.loan_id === loanId),
-    [payments, loanId]
+    () => safePayments.filter((p) => p.loan_id === loanId),
+    [safePayments, loanId]
   );
 
   // semanas ocupadas (cualquier estado), respetando termWeeks
@@ -226,7 +223,7 @@ const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMess
       return;
     }
 
-    const loan = loans.find((l) => l.id === parseInt(value, 10));
+    const loan = safeLoans.find((l) => l.id === parseInt(value, 10));
     if (!loan) {
       setFormData({
         ...updated,
@@ -343,16 +340,17 @@ const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMess
 
   return (
     <form onSubmit={handleSubmit} className="text-sm md:text-base">
-      <DialogHeader className="space-y-1">
-        <DialogTitle className="text-lg md:text-xl">
+      {/* Header (NO depende de Dialog) */}
+      <div className="space-y-1">
+        <h2 className="text-lg md:text-xl font-semibold">
           {payment ? 'Editar Pago' : 'Registrar Nuevo Pago'}
-        </DialogTitle>
-        <DialogDescription className="text-xs md:text-sm">
+        </h2>
+        <p className="text-xs md:text-sm text-muted-foreground">
           {payment
             ? 'Modifica la información del pago.'
             : 'Completa la información del nuevo pago.'}
-        </DialogDescription>
-      </DialogHeader>
+        </p>
+      </div>
 
       {/* Aviso de liquidación */}
       {selectedLoan && isLiquidated && (
@@ -376,7 +374,7 @@ const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMess
               <SelectValue placeholder="Seleccionar préstamo" />
             </SelectTrigger>
             <SelectContent className="w-full">
-              {loans
+              {safeLoans
                 .filter((l) => l.status === 'active' || l.id === loanId)
                 .map((loan) => (
                   <SelectItem key={loan.id} value={loan.id.toString()}>
@@ -468,8 +466,8 @@ const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMess
         </div>
       </div>
 
-      {/* Footer */}
-      <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      {/* Footer (NO depende de Dialog) */}
+      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <Button
           type="button"
           variant="outline"
@@ -481,7 +479,7 @@ const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMess
         <Button type="submit" disabled={isLiquidated} className="w-full sm:w-auto">
           {payment ? 'Guardar Cambios' : 'Registrar Pago'}
         </Button>
-      </DialogFooter>
+      </div>
     </form>
   );
 };

@@ -1,462 +1,546 @@
-// src/components/forms/PaymentForm.jsx
-import React, { useState, useEffect, useMemo } from 'react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+// src/components/payments/BulkPaymentDialog.jsx
+import React, { useMemo, useState } from "react";
+import { supabase } from "@/lib/customSupabaseClient";
+import { useData } from "@/contexts/DataContext";
+import { toast } from "@/components/ui/use-toast";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
-  DialogHeader,
-  DialogTitle,
+  Dialog,
+  DialogContent,
   DialogDescription,
   DialogFooter,
-} from '@/components/ui/dialog';
-import { toast } from '@/components/ui/use-toast';
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Plus, Trash2, Calendar as CalendarIcon } from "lucide-react";
 
-/* ==================== Utils ==================== */
-// Parsear fechas ISO (YYYY-MM-DD) como LOCAL (T00:00:00) para evitar -1 día
-const parseLocalISO = (v) => {
-  if (!v) return null;
-  const s = String(v);
-  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T00:00:00`) : new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
+/* ===================== Utils ===================== */
+const toISODate = (value) => {
+  const d = value ? new Date(value) : new Date();
+  if (isNaN(d.getTime())) return "";
+  return d.toISOString().split("T")[0];
 };
-
-const toYmdLocal = (v) => {
-  const d = parseLocalISO(v) || new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+const addDaysISO = (yyyyMmDd, days) => {
+  if (!yyyyMmDd) return "";
+  const d = new Date(`${yyyyMmDd}T00:00:00`);
+  if (isNaN(d.getTime())) return "";
+  d.setDate(d.getDate() + Number(days || 0));
+  return d.toISOString().split("T")[0];
 };
-
-const fmtDateMX = (v) => {
-  const d = parseLocalISO(v);
-  return d ? d.toLocaleDateString('es-MX') : '—';
-};
-
-function toNumber(n) {
+const toNumber = (n) => {
   const x = Number(n);
   return Number.isFinite(x) ? x : 0;
-}
-
-function computeInitialRemaining(loan) {
-  const rb = loan?.remaining_balance;
-  if (rb !== null && rb !== undefined) return toNumber(rb);
-  if (loan?.total_amount !== null && loan?.total_amount !== undefined)
+};
+const computeInitialRemaining = (loan) => {
+  if (loan?.remaining_balance !== null && loan?.remaining_balance !== undefined) {
+    return toNumber(loan.remaining_balance);
+  }
+  if (loan?.total_amount !== null && loan?.total_amount !== undefined) {
     return toNumber(loan.total_amount);
+  }
   return toNumber(loan?.amount) + toNumber(loan?.interest_amount);
-}
-
-// Obtener term_weeks real del préstamo (fallback a 14)
-const getTermWeeks = (loan) => {
-  if (!loan) return 14;
-  const t =
-    loan.term_weeks ??
-    (loan.term ? Number(String(loan.term).match(/\d+/)?.[0]) : null) ??
-    14;
-  return Math.max(1, Number(t) || 14);
 };
 
-// primera semana libre en 1..maxWeeks a partir de semanas PAGADAS
-const firstFreeWeekFrom = (paidWeeksSet, maxWeeks) => {
-  const lim = Math.max(1, Number(maxWeeks) || 14);
-  for (let w = 1; w <= lim; w++) {
-    if (!paidWeeksSet.has(w)) return w;
-  }
-  return null;
+// fechas: texto dd/mm/aaaa <-> ISO
+const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
+const toDisplayDDMMYYYY = (iso) => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return "";
+  return `${pad2(Number(d))}/${pad2(Number(m))}/${y}`;
 };
-
-const buildPayload = ({ formData, weekToSave }) => ({
-  loan_id: parseInt(formData.loan_id, 10),
-  client_name: formData.client_name || null, // quítala si tu tabla no la tiene
-  amount: toNumber(formData.amount),
-  payment_date: formData.payment_date, // YYYY-MM-DD (local)
-  status: formData.status,
-  week: weekToSave,
-});
-
-const toastError = (title, description) =>
-  toast({ variant: 'destructive', title, description });
-
-const validateBeforeSubmit = ({
-  formData,
-  isLiquidated,
-  payment,
-  weekToSave,
-  occupiedWeeks,
-}) => {
-  if (!formData.loan_id) {
-    return { ok: false, title: 'Campos requeridos', desc: 'Selecciona un préstamo.' };
+const toISOFromFlexible = (txt) => {
+  if (!txt) return "";
+  const s = txt.trim();
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)) {
+    const [y, m, d] = s.split("-").map(Number);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return `${y}-${pad2(m)}-${pad2(d)}`;
+    return "";
   }
-
-  if (isLiquidated) {
-    return {
-      ok: false,
-      title: 'Préstamo liquidado',
-      desc: 'Este préstamo ya está liquidado y no admite más pagos.',
-    };
+  const m1 = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (m1) {
+    const d = Number(m1[1]),
+      m = Number(m1[2]),
+      y = Number(m1[3]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return `${y}-${pad2(m)}-${pad2(d)}`;
   }
-
-  if (formData.amount === '' || formData.amount === null) {
-    return {
-      ok: false,
-      title: 'Campos requeridos',
-      desc: 'Por favor, completa todos los campos obligatorios.',
-    };
-  }
-
-  const payAmount = toNumber(formData.amount);
-  if (payAmount <= 0) {
-    return { ok: false, title: 'Monto inválido', desc: 'El monto debe ser mayor a 0.' };
-  }
-
-  // Si es nuevo y ya no quedan semanas libres, bloquear
-  if (!payment?.week && weekToSave == null) {
-    return {
-      ok: false,
-      title: 'No hay semanas disponibles',
-      desc: 'Este préstamo ya tiene todas las semanas registradas.',
-    };
-  }
-
-  // Protección extra: no permitir semana ocupada si es nuevo
-  if (!payment?.week && weekToSave != null && occupiedWeeks.has(weekToSave)) {
-    return {
-      ok: false,
-      title: 'Semana ocupada',
-      desc: `La semana ${weekToSave} ya tiene un registro para este préstamo.`,
-    };
-  }
-
-  return { ok: true };
+  return "";
 };
 /* ================================================= */
 
-const PaymentForm = ({ payment, loans, payments, onSubmit, onCancel, successMessage }) => {
-  const [formData, setFormData] = useState({
-    loan_id: '',
-    client_name: '',
-    amount: '',
-    payment_date: toYmdLocal(new Date()),
-    status: 'paid',
+/* =================== Componente =================== */
+export default function BulkPaymentDialog({ open, onOpenChange }) {
+  const { loans = [], clients = [], refreshData } = useData();
+
+  // Sólo préstamos activos
+  const activeLoans = useMemo(
+    () => (loans || []).filter((l) => String(l.status || "").toLowerCase() === "active"),
+    [loans]
+  );
+
+  // 10 filas por defecto
+  const defaultISO = toISODate(new Date());
+  const makeEmptyRow = () => ({
+    // 👇 ahora este campo será donde el usuario escribe el ID del préstamo
+    loan_input: "",
+    client_id: "",
+    loan_id: null,
+    client_name: "",
+    weekly_suggested: "",
+    amount: "",
+    date: defaultISO, // ISO para backend
+    dateInput: toDisplayDDMMYYYY(defaultISO), // dd/mm/aaaa visible
+    remaining_balance: null,
+    valid: false,
+    touched: false,
   });
 
-  const loanId = useMemo(() => parseInt(formData.loan_id || '0', 10), [formData.loan_id]);
+  const [rows, setRows] = useState(Array.from({ length: 10 }, () => makeEmptyRow()));
+  const [globalDateISO, setGlobalDateISO] = useState(defaultISO);
+  const [globalDateInput, setGlobalDateInput] = useState(toDisplayDDMMYYYY(defaultISO));
+  const [submitting, setSubmitting] = useState(false);
 
-  const selectedLoan = useMemo(
-    () => loans.find((l) => l.id === loanId) || null,
-    [loans, loanId]
-  );
+  const setRow = (idx, patch) =>
+    setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
 
-  // term_weeks dinámico del préstamo seleccionado
-  const termWeeks = useMemo(() => getTermWeeks(selectedLoan), [selectedLoan]);
+  // Autocarga usando ID de PRÉSTAMO en lugar de ID de cliente
+  const handleClientIdBlur = (idx) => {
+    setRows((prev) => {
+      const r = { ...prev[idx] };
 
-  // pagos del préstamo seleccionado
-  const loanPays = useMemo(
-    () => (payments || []).filter((p) => p.loan_id === loanId),
-    [payments, loanId]
-  );
+      // 👉 ahora se toma lo que el usuario escribe como ID de préstamo
+      const typed = String(r.loan_input || "").trim();
+      if (!typed) return prev;
 
-  // semanas ocupadas (cualquier estado), respetando termWeeks
-  const occupiedWeeks = useMemo(() => {
-    const set = new Set();
-    for (const p of loanPays) {
-      const w = Number(p.week || 0);
-      if (w >= 1 && w <= termWeeks) set.add(w);
-    }
-    return set;
-  }, [loanPays, termWeeks]);
+      // Buscar el préstamo activo por ID
+      const loan = activeLoans.find((l) => String(l.id) === typed);
+      const client = loan
+        ? clients.find((c) => String(c.id) === String(loan.client_id))
+        : null;
 
-  // semanas pagadas (status = paid/Pagado), respetando termWeeks
-  const paidWeeks = useMemo(() => {
-    const set = new Set();
-    for (const p of loanPays) {
-      const st = (p.status || '').toLowerCase();
-      if (st === 'paid' || st === 'pagado') {
-        const w = Number(p.week || 0);
-        if (w >= 1 && w <= termWeeks) set.add(w);
+      if (!loan || !client) {
+        Object.assign(r, {
+          loan_id: null,
+          client_id: "",
+          client_name: "",
+          weekly_suggested: "",
+          remaining_balance: null,
+          valid: false,
+        });
+      } else {
+        r.loan_id = loan.id;
+        r.client_id = client.id; // se guarda el ID real del cliente para el insert
+        r.client_name = loan.client_name || client.name || `(Cliente #${client.id})`;
+
+        const suggested = toNumber(loan.weekly_payment || 0);
+        r.weekly_suggested = suggested || "";
+        if (!r.amount && suggested) r.amount = suggested;
+        r.remaining_balance = computeInitialRemaining(loan);
+
+        if (!r.date) {
+          r.date = globalDateISO;
+          r.dateInput = toDisplayDDMMYYYY(globalDateISO);
+        }
+        r.valid = true;
       }
-    }
-    return set;
-  }, [loanPays, termWeeks]);
 
-  const allWeeksPaid = useMemo(() => paidWeeks.size >= termWeeks, [paidWeeks, termWeeks]);
+      r.touched = true;
+      const nx = [...prev];
+      nx[idx] = r;
+      return nx;
+    });
+  };
 
-  const firstFreeWeek = useMemo(
-    () => firstFreeWeekFrom(paidWeeks, termWeeks),
-    [paidWeeks, termWeeks]
+  const handleAmountChange = (idx, val) => setRow(idx, { amount: val });
+
+  // Fecha por texto
+  const handleDateTextChange = (idx, val) => setRow(idx, { dateInput: val });
+  const handleDateBlur = (idx) =>
+    setRows((prev) => {
+      const r = { ...prev[idx] };
+      const iso = toISOFromFlexible(r.dateInput);
+      if (iso) {
+        r.date = iso;
+        r.dateInput = toDisplayDDMMYYYY(iso);
+      }
+      const nx = [...prev];
+      nx[idx] = r;
+      return nx;
+    });
+
+  // Fecha por selector nativo
+  const handleRowNativeDate = (idx, isoVal) =>
+    setRows((prev) => {
+      const r = { ...prev[idx] };
+      const iso = toISOFromFlexible(isoVal);
+      if (iso) {
+        r.date = iso;
+        r.dateInput = toDisplayDDMMYYYY(iso);
+      }
+      const nx = [...prev];
+      nx[idx] = r;
+      return nx;
+    });
+
+  const addRow = () => setRows((prev) => [...prev, makeEmptyRow()]);
+  const removeRow = (idx) => setRows((prev) => prev.filter((_, i) => i !== idx));
+
+  const effectiveRows = rows.filter(
+    (r) => r.valid && r.loan_id && toNumber(r.amount) > 0 && r.date
   );
+  const totalAmount = effectiveRows.reduce((s, r) => s + toNumber(r.amount), 0);
 
-  // préstamo liquidado: saldo <= 0 o todas las semanas pagadas o estado != active
-  const isLiquidated = useMemo(() => {
-    if (!selectedLoan) return false;
-    const rb = computeInitialRemaining(selectedLoan);
-    const zeroOrLess = rb <= 0;
-    const inactive = (selectedLoan.status || '').toLowerCase() !== 'active';
-    return zeroOrLess || allWeeksPaid || inactive;
-  }, [selectedLoan, allWeeksPaid]);
+  // Aplica fecha global a TODAS las filas
+  const handleApplyGlobalDate = () =>
+    setRows((prev) =>
+      prev.map((r) => ({
+        ...r,
+        date: globalDateISO,
+        dateInput: toDisplayDDMMYYYY(globalDateISO),
+      }))
+    );
 
-  // Cargar datos en modo edición o reset en modo alta
-  useEffect(() => {
-    if (payment) {
-      setFormData({
-        loan_id: payment.loan_id?.toString() || '',
-        client_name: payment.client_name || '',
-        amount: String(payment.amount ?? ''),
-        payment_date: payment.payment_date ? toYmdLocal(payment.payment_date) : toYmdLocal(new Date()),
-        status: payment.status || 'paid',
+  // Global por texto / selector
+  const handleGlobalDateChange = (val) => setGlobalDateInput(val);
+  const handleGlobalDateBlur = () => {
+    const iso = toISOFromFlexible(globalDateInput);
+    if (iso) {
+      setGlobalDateISO(iso);
+      setGlobalDateInput(toDisplayDDMMYYYY(iso));
+    }
+  };
+  const handleGlobalNativeDate = (isoVal) => {
+    const iso = toISOFromFlexible(isoVal);
+    if (iso) {
+      setGlobalDateISO(iso);
+      setGlobalDateInput(toDisplayDDMMYYYY(iso));
+    }
+  };
+
+  /* ================= Submit con SEMANAS ================= */
+  const handleSubmit = async () => {
+    if (effectiveRows.length === 0) {
+      toast({
+        variant: "destructive",
+        title: "Nada para registrar",
+        description: "Captura al menos un pago válido (ID cliente, monto y fecha).",
       });
       return;
     }
 
-    setFormData({
-      loan_id: '',
-      client_name: '',
-      amount: '',
-      payment_date: toYmdLocal(new Date()),
-      status: 'paid',
-    });
-  }, [payment]);
-
-  // Cuando seleccionamos préstamo, sugerimos monto y fecha (next_payment_date si existe)
-  const handleSelectChange = (name, value) => {
-    let updated = { ...formData, [name]: value };
-
-    if (name === 'loan_id') {
-      const loan = loans.find((l) => l.id === parseInt(value, 10));
-      if (!loan) {
-        updated.client_name = '';
-        updated.amount = '';
-        updated.payment_date = toYmdLocal(new Date());
-        setFormData(updated);
-        return;
-      }
-
-      const rb = computeInitialRemaining(loan);
-      const inactive = (loan.status || '').toLowerCase() !== 'active';
-      const done = rb <= 0 || inactive || paidWeeks.size >= getTermWeeks(loan);
-
-      updated.client_name = loan.client_name || '';
-      updated.amount = done ? '' : (loan.weekly_payment ?? '');
-
-      // sugerimos fecha usando LOCAL YMD (coherente con LoanDetails)
-      updated.payment_date = loan.next_payment_date
-        ? toYmdLocal(loan.next_payment_date)
-        : toYmdLocal(new Date());
-    }
-
-    if (name === 'status') {
-      updated.status = value;
-    }
-
-    setFormData(updated);
-  };
-
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-
-    // Permitir coma como separador decimal y evitar NaN por formato local
-    if (name === 'amount') {
-      const normalized = String(value).replace(',', '.'); // 19,98 -> 19.98
-      setFormData((prev) => ({ ...prev, [name]: normalized }));
-      return;
-    }
-
-    setFormData((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const maybeShowOverlay = (ok, meta) => {
-    if (ok === false) return;
-    if (typeof window === 'undefined') return;
-    if (typeof window.showSuccess !== 'function') return;
-
-    const msg = successMessage || (meta.isEdit ? 'Pago actualizado' : 'Pago registrado');
-    window.showSuccess(msg);
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-
-    const weekToSave = payment?.week ?? firstFreeWeek;
-    const validation = validateBeforeSubmit({
-      formData,
-      isLiquidated,
-      payment,
-      weekToSave,
-      occupiedWeeks,
-    });
-
-    if (!validation.ok) {
-      toastError(validation.title, validation.desc);
-      return;
-    }
-
-    const payload = buildPayload({ formData, weekToSave });
-    const meta = { isEdit: !!payment?.id, id: payment?.id ?? null };
-
+    setSubmitting(true);
     try {
-      const result = onSubmit(payload, meta);
-
-      // Solo mostrar overlay si onSubmit es async y fue exitoso.
-      if (result && typeof result.then === 'function') {
-        const ok = await result;
-        maybeShowOverlay(ok, meta);
+      // 1) Agrupar filas por préstamo
+      const byLoan = new Map(); // loan_id -> filas
+      for (const r of effectiveRows) {
+        if (!byLoan.has(r.loan_id)) byLoan.set(r.loan_id, []);
+        byLoan.get(r.loan_id).push(r);
       }
+      const loanIds = Array.from(byLoan.keys());
+
+      // 2) Traer pagos existentes (para saber qué semanas están ocupadas)
+      const { data: payData, error: payErr } = await supabase
+        .from("payments")
+        .select("loan_id, week, status")
+        .in("loan_id", loanIds);
+      if (payErr) throw payErr;
+
+      // 3) Asignar semanas libres respetando term_weeks
+      const assignedWeeksPerLoan = new Map();
+      const weekByRow = new Map();
+      const noWeeks = [];
+
+      for (const loanId of loanIds) {
+        const rowsForLoan = byLoan.get(loanId);
+        const loan = activeLoans.find((l) => l.id === loanId);
+        const termWeeks = Math.max(
+          1,
+          Number(
+            loan?.term_weeks ??
+              (loan?.term ? Number(String(loan.term).match(/\d+/)?.[0]) : 14)
+          ) || 14
+        );
+
+        const existing = (payData || []).filter((p) => p.loan_id === loanId);
+        const paidWeeks = new Set();
+        const occupiedWeeks = new Set();
+        for (const p of existing) {
+          const w = Number(p.week || 0);
+          if (w >= 1 && w <= termWeeks) {
+            occupiedWeeks.add(w);
+            const st = String(p.status || "").toLowerCase();
+            if (st === "paid" || st === "pagado") paidWeeks.add(w);
+          }
+        }
+        assignedWeeksPerLoan.set(loanId, new Set());
+
+        for (const r of rowsForLoan) {
+          const batchAssigned = assignedWeeksPerLoan.get(loanId);
+          const week = (() => {
+            for (let w = 1; w <= termWeeks; w++) {
+              if (!paidWeeks.has(w) && !occupiedWeeks.has(w) && !batchAssigned.has(w)) return w;
+            }
+            return null;
+          })();
+
+          if (week == null) {
+            noWeeks.push(`Préstamo #${loanId} (${r.client_name || "sin nombre"}) sin semanas libres`);
+          } else {
+            weekByRow.set(r, week);
+            batchAssigned.add(week);
+          }
+        }
+      }
+
+      if (noWeeks.length > 0) {
+        throw new Error(`No hay semanas disponibles para:\n• ${noWeeks.join("\n• ")}`);
+      }
+
+      // 4) Insert masivo en payments (incluyendo WEEK y CLIENT_NAME)
+      const rowsToInsert = effectiveRows.map((r) => ({
+        loan_id: r.loan_id,
+        client_id: Number(r.client_id),
+        client_name: r.client_name || null,
+        amount: toNumber(r.amount),
+        payment_date: r.date, // ISO
+        status: "paid",
+        week: weekByRow.get(r), // semana asignada
+      }));
+
+      const { error: insErr } = await supabase.from("payments").insert(rowsToInsert);
+      if (insErr) throw insErr;
+
+      // 5) Actualizar préstamos (next_payment_date semanal y saldo)
+      for (const r of effectiveRows) {
+        const loan = activeLoans.find((l) => l.id === r.loan_id);
+        if (!loan) continue;
+
+        const prevRemaining = toNumber(computeInitialRemaining(loan));
+        let newRemaining = prevRemaining - toNumber(r.amount);
+        if (newRemaining < 0) newRemaining = 0;
+
+        if (newRemaining === 0) {
+          const { error: updErr } = await supabase
+            .from("loans")
+            .update({
+              status: "completed",
+              remaining_balance: 0,
+              next_payment_date: null,
+              due_date: r.date,
+            })
+            .eq("id", r.loan_id);
+          if (updErr) throw updErr;
+        } else {
+          // base programada: next existente -> +7; si no hay, start_date + 7; si tampoco, fecha del pago
+          const scheduledBase =
+            loan.next_payment_date ||
+            (loan.start_date ? addDaysISO(loan.start_date, 7) : null) ||
+            r.date;
+          const next = addDaysISO(scheduledBase, 7);
+
+          const { error: updErr } = await supabase
+            .from("loans")
+            .update({
+              next_payment_date: next,
+              remaining_balance: newRemaining,
+            })
+            .eq("id", r.loan_id);
+          if (updErr) throw updErr;
+        }
+      }
+
+      toast({
+        title: "Pagos registrados",
+        description: `Se registraron ${effectiveRows.length} pagos por $${Number(
+          totalAmount || 0
+        ).toLocaleString("es-MX")}.`,
+      });
+
+      await refreshData?.();
+      setRows((prev) => prev.map(() => makeEmptyRow()));
+      onOpenChange?.(false);
     } catch (err) {
-      // los errores deberían manejarse con toast en el padre;
-      // aquí evitamos overlay en fallos.
+      console.error("Bulk grid payment error:", err);
+      toast({
+        variant: "destructive",
+        title: "Error al registrar pagos",
+        description: err.message || "Intenta nuevamente.",
+      });
+    } finally {
+      setSubmitting(false);
     }
   };
 
+  /* ====================== UI ====================== */
   return (
-    <form onSubmit={handleSubmit} className="text-sm md:text-base">
-      <DialogHeader className="space-y-1">
-        <DialogTitle className="text-lg md:text-xl">
-          {payment ? 'Editar Pago' : 'Registrar Nuevo Pago'}
-        </DialogTitle>
-        <DialogDescription className="text-xs md:text-sm">
-          {payment
-            ? 'Modifica la información del pago.'
-            : 'Completa la información del nuevo pago.'}
-        </DialogDescription>
-      </DialogHeader>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[98vw] max-w-[98vw] h-[92vh] p-0 sm:rounded-xl overflow-y-auto">
+        <div className="flex flex-col h-full">
+          <DialogHeader className="px-5 pt-5">
+            <DialogTitle>Captura masiva de pagos</DialogTitle>
+            <DialogDescription>
+              Escribe el <b>ID del cliente</b>, el <b>abono semanal</b> y la{" "}
+              <b>fecha de pago</b>. Puedes <b>teclear</b> la fecha (dd/mm/aaaa) o{" "}
+              <b>seleccionarla</b> con el calendario.
+            </DialogDescription>
+          </DialogHeader>
 
-      {/* Aviso de liquidación */}
-      {selectedLoan && isLiquidated && (
-        <div className="p-3 bg-green-50 rounded-lg text-sm text-green-800 my-3">
-          <strong>Préstamo liquidado.</strong> Ya no se pueden registrar más pagos para este préstamo.
-        </div>
-      )}
+          {/* Barra superior */}
+          <div className="px-5 pb-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <Label>Fecha global (dd/mm/aaaa o selector)</Label>
+                <div className="relative">
+                  <Input
+                    placeholder="dd/mm/aaaa"
+                    value={globalDateInput}
+                    onChange={(e) => handleGlobalDateChange(e.target.value)}
+                    onBlur={handleGlobalDateBlur}
+                    className="pr-10"
+                  />
+                  <CalendarIcon className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 pointer-events-none opacity-70" />
+                  <input
+                    type="date"
+                    value={globalDateISO}
+                    onChange={(e) => handleGlobalNativeDate(e.target.value)}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 w-8 h-8 opacity-0 cursor-pointer"
+                    aria-label="Abrir calendario"
+                  />
+                </div>
 
-      {/* GRID */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 py-4">
-        {/* Préstamo */}
-        <div className="space-y-2">
-          <Label htmlFor="loan_id">Préstamo *</Label>
-          <Select
-            name="loan_id"
-            value={formData.loan_id}
-            onValueChange={(value) => handleSelectChange('loan_id', value)}
-            required
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Seleccionar préstamo" />
-            </SelectTrigger>
-            <SelectContent className="w-full">
-              {loans
-                .filter((l) => l.status === 'active' || l.id === loanId)
-                .map((loan) => (
-                  <SelectItem key={loan.id} value={loan.id.toString()}>
-                    #{loan.id} - {loan.client_name}
-                  </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
-        </div>
+                <div className="flex gap-2 pt-2">
+                  <Button type="button" variant="outline" onClick={handleApplyGlobalDate}>
+                    Aplicar a todas las filas
+                  </Button>
+                  <Button type="button" variant="outline" onClick={addRow}>
+                    <Plus className="h-4 w-4 mr-1" /> Agregar fila
+                  </Button>
+                </div>
+              </div>
 
-        {/* Estado del pago */}
-        <div className="space-y-2">
-          <Label htmlFor="status">Estado del Pago *</Label>
-          <Select
-            name="status"
-            value={formData.status}
-            onValueChange={(value) => handleSelectChange('status', value)}
-            required
-            disabled={isLiquidated}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Seleccionar estado" />
-            </SelectTrigger>
-            <SelectContent className="w-full">
-              <SelectItem value="paid">Pagado</SelectItem>
-              <SelectItem value="pending">Pendiente</SelectItem>
-              <SelectItem value="overdue">Vencido</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Tarjeta info préstamo */}
-        {selectedLoan && (
-          <div className="p-3 bg-blue-50 rounded-lg text-blue-800 md:col-span-2">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <p>
-                <strong>Pago semanal:</strong>{' '}
-                ${toNumber(selectedLoan.weekly_payment).toLocaleString('es-MX')}
-              </p>
-              <p>
-                <strong>Saldo pendiente:</strong>{' '}
-                ${computeInitialRemaining(selectedLoan).toLocaleString('es-MX')}
-              </p>
-              <p>
-                <strong>Próximo pago (sugerido):</strong>{' '}
-                {fmtDateMX(selectedLoan?.next_payment_date)}
-              </p>
+              <div className="sm:col-span-2 flex items-end justify-end gap-4">
+                <div className="text-sm">
+                  <div>
+                    <b>Filas válidas:</b>{" "}
+                    {rows.filter((r) => r.valid && r.loan_id).length} / {rows.length}
+                  </div>
+                  <div>
+                    <b>Total a cobrar:</b> $
+                    {Number(totalAmount || 0).toLocaleString("es-MX")}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
-        )}
 
-        {/* Monto */}
-        <div className="space-y-2">
-          <Label htmlFor="amount">Monto del Pago *</Label>
-          <Input
-            id="amount"
-            name="amount"
-            type="number"
-            value={formData.amount}
-            onChange={handleChange}
-            required
-            disabled={isLiquidated}
-            className="w-full"
-            inputMode="decimal"
-            min="0"
-            step="any"
-          />
+          {/* Tabla */}
+          <div className="flex-1 min-h-0 overflow-y-auto border-t">
+            <div className="min-w-full">
+              <div className="grid grid-cols-12 gap-2 px-5 py-3 text-xs font-semibold uppercase text-muted-foreground">
+                <div className="col-span-2">ID cliente</div>
+                <div className="col-span-5">Nombre (auto)</div>
+                <div className="col-span-2">Abono semanal</div>
+                <div className="col-span-2">Fecha de pago (dd/mm/aaaa)</div>
+                <div className="col-span-1 text-center">Acciones</div>
+              </div>
+
+              {rows.map((r, idx) => (
+                <div
+                  key={idx}
+                  className="grid grid-cols-12 gap-2 px-5 py-2 items-center border-t"
+                >
+                  {/* ID cliente (pero ahora se captura ID de PRÉSTAMO) */}
+                  <div className="col-span-2">
+                    <Input
+                      placeholder="Ej. 1023"
+                      value={r.loan_input}
+                      onChange={(e) => setRow(idx, { loan_input: e.target.value })}
+                      onBlur={() => handleClientIdBlur(idx)}
+                    />
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      {r.loan_id
+                        ? `Préstamo #${r.loan_id}`
+                        : r.touched && !r.client_name
+                        ? "Cliente / préstamo no encontrado"
+                        : ""}
+                    </p>
+                  </div>
+
+                  {/* Nombre */}
+                  <div className="col-span-5">
+                    <Input value={r.client_name} disabled placeholder="Nombre del cliente" />
+                    {r.remaining_balance != null && (
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        Saldo: $
+                        {toNumber(r.remaining_balance).toLocaleString("es-MX")} ·
+                        Sugerido: $
+                        {toNumber(r.weekly_suggested || 0).toLocaleString("es-MX")}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Abono semanal */}
+                  <div className="col-span-2">
+                    <Input
+                      type="number"
+                      min="0"
+                      inputMode="decimal"
+                      placeholder="0"
+                      value={r.amount}
+                      onChange={(e) => handleAmountChange(idx, e.target.value)}
+                    />
+                  </div>
+
+                  {/* Fecha */}
+                  <div className="col-span-2">
+                    <div className="relative">
+                      <Input
+                        placeholder="dd/mm/aaaa"
+                        value={r.dateInput}
+                        onChange={(e) => handleDateTextChange(idx, e.target.value)}
+                        onBlur={() => handleDateBlur(idx)}
+                        className="pr-10"
+                      />
+                      <CalendarIcon className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 pointer-events-none opacity-70" />
+                      <input
+                        type="date"
+                        value={r.date}
+                        onChange={(e) => handleRowNativeDate(idx, e.target.value)}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 w-8 h-8 opacity-0 cursor-pointer"
+                        aria-label="Abrir calendario"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Acciones */}
+                  <div className="col-span-1 flex justify-center">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => removeRow(idx)}
+                      title="Eliminar fila"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Footer */}
+          <DialogFooter className="p-5 gap-2 border-t">
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSubmit} disabled={submitting || effectiveRows.length === 0}>
+              {submitting ? "Registrando…" : "Registrar pagos"}
+            </Button>
+          </DialogFooter>
         </div>
-
-        {/* Fecha */}
-        <div className="space-y-2">
-          <Label htmlFor="payment_date">Fecha de Pago *</Label>
-          <Input
-            id="payment_date"
-            name="payment_date"
-            type="date"
-            value={formData.payment_date}
-            onChange={handleChange}
-            required
-            disabled={isLiquidated}
-            className="w-full"
-          />
-        </div>
-
-        <div className="md:col-span-2 text-xs text-muted-foreground">
-          {payment
-            ? 'Este pago conservará la información registrada originalmente.'
-            : 'Revisa el monto y la fecha antes de guardar.'}
-        </div>
-      </div>
-
-      {/* Footer */}
-      <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onCancel}
-          className="w-full sm:w-auto"
-        >
-          Cancelar
-        </Button>
-        <Button type="submit" disabled={isLiquidated} className="w-full sm:w-auto">
-          {payment ? 'Guardar Cambios' : 'Registrar Pago'}
-        </Button>
-      </DialogFooter>
-    </form>
+      </DialogContent>
+    </Dialog>
   );
-};
-
-export default PaymentForm;
+}
