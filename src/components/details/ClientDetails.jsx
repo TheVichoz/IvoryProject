@@ -1,5 +1,6 @@
 // src/components/details/ClientDetails.jsx
 import React from 'react';
+import PropTypes from 'prop-types';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Camera } from 'lucide-react';
@@ -10,6 +11,17 @@ const InfoField = ({ label, value, className }) => (
     <p className="text-gray-900 text-sm">{value ?? 'Sin especificar'}</p>
   </div>
 );
+
+InfoField.propTypes = {
+  label: PropTypes.string.isRequired,
+  value: PropTypes.oneOfType([PropTypes.string, PropTypes.number, PropTypes.node]),
+  className: PropTypes.string,
+};
+
+InfoField.defaultProps = {
+  value: null,
+  className: '',
+};
 
 /* ===== Toggle de visibilidad del ID de cliente ===== */
 const SHOW_CLIENT_ID = false;
@@ -46,24 +58,32 @@ function getSemaphoreForClient(client, loans) {
     const due = new Date(rawDue);
     const today = new Date();
     const startOf = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
     const days =
-      (startOf(due).getTime() - (startOf(today).getTime())) / (1000 * 60 * 60 * 24);
+      (startOf(due).getTime() - startOf(today).getTime()) / (1000 * 60 * 60 * 24);
 
     if (days < 0) return { color: 'red', label: 'Pago atrasado' };
     if (days <= DUE_SOON_DAYS) return { color: 'yellow', label: 'Pago próximo' };
     return { color: 'green', label: 'Al corriente' };
   }
+
   return { color: 'green', label: 'Al corriente' };
+}
+
+function getPalette(color) {
+  if (color === 'green') {
+    return { bg: 'bg-green-100', text: 'text-green-800', dot: 'bg-green-600' };
+  }
+  if (color === 'yellow') {
+    return { bg: 'bg-yellow-100', text: 'text-yellow-800', dot: 'bg-yellow-500' };
+  }
+  return { bg: 'bg-red-100', text: 'text-red-800', dot: 'bg-red-600' };
 }
 
 function SemaphoreBadge({ sem }) {
   if (!sem) return null;
-  const palette =
-    sem.color === 'green'
-      ? { bg: 'bg-green-100', text: 'text-green-800', dot: 'bg-green-600' }
-      : sem.color === 'yellow'
-      ? { bg: 'bg-yellow-100', text: 'text-yellow-800', dot: 'bg-yellow-500' }
-      : { bg: 'bg-red-100', text: 'text-red-800', dot: 'bg-red-600' };
+
+  const palette = getPalette(sem.color);
 
   return (
     <span
@@ -76,25 +96,38 @@ function SemaphoreBadge({ sem }) {
   );
 }
 
+SemaphoreBadge.propTypes = {
+  sem: PropTypes.shape({
+    color: PropTypes.oneOf(['green', 'yellow', 'red']).isRequired,
+    label: PropTypes.string.isRequired,
+  }),
+};
+
+SemaphoreBadge.defaultProps = {
+  sem: null,
+};
+
 /* ================== Componente ================== */
-const ClientDetails = ({ client, aval, loans = [] }) => {
+const ClientDetails = ({ client, aval, loans }) => {
   if (!client) return null;
 
-  const fechaRegistro = client.fecha_visita
+  const fechaRegistro = client?.fecha_visita
     ? new Date(`${client.fecha_visita}T00:00:00`).toLocaleDateString('es-MX')
     : 'N/A';
 
-  const miembroDesde = client.created_at
+  const miembroDesde = client?.created_at
     ? new Date(client.created_at).toLocaleDateString('es-MX')
     : 'Sin especificar';
 
   const semaphore = getSemaphoreForClient(client, loans);
 
+  const clientAddress = client?.address || client?.direccion;
+
   return (
     <div className="space-y-6">
       {/* Encabezado */}
       <div className="flex flex-col sm:flex-row gap-6 items-start">
-        {client.foto_url ? (
+        {client?.foto_url ? (
           <img
             src={client.foto_url}
             alt={`Foto de ${client.name}`}
@@ -112,6 +145,7 @@ const ClientDetails = ({ client, aval, loans = [] }) => {
             <div>
               <div className="flex items-center gap-3">
                 <h3 className="text-2xl font-bold text-gray-800">{client.name}</h3>
+
                 {/* Badge de estado */}
                 <Badge
                   variant={client.status === 'active' ? 'default' : 'secondary'}
@@ -120,10 +154,11 @@ const ClientDetails = ({ client, aval, loans = [] }) => {
                   {client.status === 'active' ? 'Activo' : 'Inactivo'}
                 </Badge>
               </div>
+
               <p className="text-muted-foreground">{client.email || 'Sin especificar'}</p>
             </div>
 
-            {/* Derecha: semáforo debajo del estado */}
+            {/* Derecha: semáforo */}
             <div className="flex flex-col items-start sm:items-end gap-1">
               {semaphore && <SemaphoreBadge sem={semaphore} />}
             </div>
@@ -144,11 +179,7 @@ const ClientDetails = ({ client, aval, loans = [] }) => {
         <InfoField label="Grupo" value={client.grupo} />
         <InfoField label="Fecha de Registro/Visita" value={fechaRegistro} />
         <InfoField label="Miembro desde" value={miembroDesde} />
-        <InfoField
-          label="Dirección"
-          value={client.address || client.direccion}
-          className="lg:col-span-3"
-        />
+        <InfoField label="Dirección" value={clientAddress} className="lg:col-span-3" />
       </div>
 
       {/* Información del aval */}
@@ -157,17 +188,65 @@ const ClientDetails = ({ client, aval, loans = [] }) => {
           <h4 className="text-lg font-semibold text-gray-700 mt-6 mb-2 border-b pb-2">
             Información del Aval
           </h4>
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-4">
             <InfoField label="Nombre del Aval" value={aval.nombre} />
             <InfoField label="Teléfono del Aval" value={aval.telefono} />
             <InfoField label="Correo Electrónico (Aval)" value={aval.email} />
             <InfoField label="Número de INE (Aval)" value={aval.numero_ine} />
-            <InfoField label="Dirección del Aval" value={aval.direccion} className="lg:col-span-2" />
+            <InfoField
+              label="Dirección del Aval"
+              value={aval.direccion}
+              className="lg:col-span-2"
+            />
           </div>
         </div>
       )}
     </div>
   );
+};
+
+ClientDetails.propTypes = {
+  client: PropTypes.shape({
+    id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+    name: PropTypes.string,
+    status: PropTypes.string,
+    email: PropTypes.string,
+    phone: PropTypes.string,
+    numero_ine: PropTypes.string,
+    poblacion: PropTypes.string,
+    ruta: PropTypes.string,
+    grupo: PropTypes.string,
+    fecha_visita: PropTypes.string,
+    created_at: PropTypes.string,
+    foto_url: PropTypes.string,
+    address: PropTypes.string,
+    direccion: PropTypes.string,
+  }),
+  aval: PropTypes.shape({
+    nombre: PropTypes.string,
+    telefono: PropTypes.string,
+    email: PropTypes.string,
+    numero_ine: PropTypes.string,
+    direccion: PropTypes.string,
+  }),
+  loans: PropTypes.arrayOf(
+    PropTypes.shape({
+      client_id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+      status: PropTypes.string,
+      remaining_balance: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+      next_due_date: PropTypes.string,
+      next_payment_date: PropTypes.string,
+      due_date: PropTypes.string,
+      nextDate: PropTypes.string,
+    })
+  ),
+};
+
+ClientDetails.defaultProps = {
+  client: null,
+  aval: null,
+  loans: [],
 };
 
 export default ClientDetails;
