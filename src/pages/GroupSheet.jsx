@@ -59,14 +59,50 @@ const toDateInput = (dLike) => {
 };
 
 /* ===== Normalización de texto multilínea para evitar huecos =====
-   (ESLint: prefer replaceAll cuando aplica)
+   FIX Sonar S5852: evitar regex con potencial backtracking.
+   - Normaliza CRLF/CR a LF
+   - Quita espacios/tabs antes de cada salto de línea
+   - Colapsa múltiples saltos de línea en uno
+   - Aplica límite de tamaño para evitar inputs gigantes
 */
-const normalizeMultiline = (s) =>
-  toStr(s)
-    .replaceAll("\r\n", "\n") // ✅ replaceAll
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
+const MAX_TEXT = 20000;
+
+const normalizeMultiline = (s) => {
+  const str = toStr(s).slice(0, MAX_TEXT);
+
+  // 1) Normalizar saltos de línea
+  const nl = str.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+
+  // 2) Quitar espacios/tabs inmediatamente antes de '\n'
+  let out = "";
+  for (let i = 0; i < nl.length; i++) {
+    const ch = nl[i];
+
+    if (ch === "\n") {
+      let j = out.length - 1;
+      while (j >= 0 && (out[j] === " " || out[j] === "\t")) j--;
+      out = out.slice(0, j + 1) + "\n";
+    } else {
+      out += ch;
+    }
+  }
+
+  // 3) Colapsar múltiples '\n' seguidos a uno
+  let final = "";
+  let prevNL = false;
+  for (let i = 0; i < out.length; i++) {
+    const ch = out[i];
+    if (ch === "\n") {
+      if (!prevNL) final += "\n";
+      prevNL = true;
+    } else {
+      final += ch;
+      prevNL = false;
+    }
+  }
+
+  return final.trim();
+};
 
 const joinLines = (...parts) =>
   parts
@@ -1100,7 +1136,6 @@ function renderTableBody({ loading, dataLoading, rows, weekHeaders }) {
 }
 
 function Table({ loading, dataLoading, rows, weekHeaders, weekColKeys }) {
-  // ✅ Sonar: quitamos weekCount si no se usa (unused assignment)
   return (
     <table className="gs-table w-full text-sm border" style={{ borderColor: "#000" }}>
       <colgroup>
