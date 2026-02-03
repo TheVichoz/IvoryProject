@@ -1,5 +1,6 @@
 // src/components/payments/BulkPaymentDialog.jsx
 import React, { useMemo, useState } from "react";
+import PropTypes from "prop-types";
 import { supabase } from "@/lib/customSupabaseClient";
 import { useData } from "@/contexts/DataContext";
 import { toast } from "@/components/ui/use-toast";
@@ -19,14 +20,14 @@ import { Plus, Trash2, Calendar as CalendarIcon } from "lucide-react";
 /* ===================== Utils ===================== */
 const toISODate = (value) => {
   const d = value ? new Date(value) : new Date();
-  if (isNaN(d.getTime())) return "";
+  if (Number.isNaN(d.getTime())) return "";
   return d.toISOString().split("T")[0];
 };
 
 const addDaysISO = (yyyyMmDd, days) => {
   if (!yyyyMmDd) return "";
   const d = new Date(`${yyyyMmDd}T00:00:00`);
-  if (isNaN(d.getTime())) return "";
+  if (Number.isNaN(d.getTime())) return "";
   d.setDate(d.getDate() + Number(days || 0));
   return d.toISOString().split("T")[0];
 };
@@ -66,7 +67,8 @@ const toISOFromFlexible = (txt) => {
     return "";
   }
 
-  const m1 = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  // Sonar: no hace falta escapar "/" dentro del character class
+  const m1 = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
   if (m1) {
     const d = Number(m1[1]);
     const m = Number(m1[2]);
@@ -75,6 +77,11 @@ const toISOFromFlexible = (txt) => {
   }
 
   return "";
+};
+
+const newRowId = () => {
+  if (typeof crypto !== "undefined" && crypto?.randomUUID) return crypto.randomUUID();
+  return `row_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 };
 /* ================================================= */
 
@@ -225,6 +232,7 @@ const updateLoansAfterPayments = async ({ effectiveRows, activeLoans }) => {
     const newRemaining = Math.max(0, prevRemaining - paid);
 
     if (newRemaining === 0) {
+      // Se marca como completado y se guarda la fecha del último pago como due_date
       await updateLoanCompleted(r.loan_id, r.date);
       continue;
     }
@@ -234,6 +242,12 @@ const updateLoansAfterPayments = async ({ effectiveRows, activeLoans }) => {
   }
 };
 /* ========================================================= */
+
+const getLoanHintText = (row) => {
+  if (row.loan_id) return `Préstamo #${row.loan_id}`;
+  if (row.touched && !row.client_name) return "Cliente / préstamo no encontrado";
+  return "";
+};
 
 /* =================== Componente =================== */
 export default function BulkPaymentDialog({ open, onOpenChange }) {
@@ -245,10 +259,11 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
     [loans]
   );
 
-  // 10 filas por defecto
   const defaultISO = toISODate(new Date());
+
   const makeEmptyRow = () => ({
-    // 👇 ahora este campo será donde el usuario escribe el ID del préstamo
+    row_id: newRowId(),
+    // el usuario escribe el ID del préstamo aquí
     loan_input: "",
     client_id: "",
     loan_id: null,
@@ -275,11 +290,9 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
     setRows((prev) => {
       const r = { ...prev[idx] };
 
-      // 👉 ahora se toma lo que el usuario escribe como ID de préstamo
       const typed = String(r.loan_input || "").trim();
       if (!typed) return prev;
 
-      // Buscar el préstamo activo por ID
       const loan = activeLoans.find((l) => String(l.id) === typed);
       const client = loan ? clients.find((c) => String(c.id) === String(loan.client_id)) : null;
 
@@ -300,12 +313,14 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
         const suggested = toNumber(loan.weekly_payment || 0);
         r.weekly_suggested = suggested || "";
         if (!r.amount && suggested) r.amount = suggested;
+
         r.remaining_balance = computeInitialRemaining(loan);
 
         if (!r.date) {
           r.date = globalDateISO;
           r.dateInput = toDisplayDDMMYYYY(globalDateISO);
         }
+
         r.valid = true;
       }
 
@@ -429,6 +444,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
       setRows((prev) => prev.map(() => makeEmptyRow()));
       onOpenChange?.(false);
     } catch (err) {
+      // eslint-disable-next-line no-console
       console.error("Bulk grid payment error:", err);
       toast({
         variant: "destructive",
@@ -448,9 +464,8 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
           <DialogHeader className="px-5 pt-5">
             <DialogTitle>Captura masiva de pagos</DialogTitle>
             <DialogDescription>
-              Escribe el <b>ID del cliente</b>, el <b>abono semanal</b> y la{" "}
-              <b>fecha de pago</b>. Puedes <b>teclear</b> la fecha (dd/mm/aaaa) o{" "}
-              <b>seleccionarla</b> con el calendario.
+              Escribe el <b>ID del cliente</b>, el <b>abono semanal</b> y la <b>fecha de pago</b>. Se
+              puede <b>teclear</b> la fecha (dd/mm/aaaa) o <b>seleccionarla</b> con el calendario.
             </DialogDescription>
           </DialogHeader>
 
@@ -513,7 +528,10 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
               </div>
 
               {rows.map((r, idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-2 px-5 py-2 items-center border-t">
+                <div
+                  key={r.row_id}
+                  className="grid grid-cols-12 gap-2 px-5 py-2 items-center border-t"
+                >
                   {/* ID cliente (pero ahora se captura ID de PRÉSTAMO) */}
                   <div className="col-span-2">
                     <Input
@@ -522,13 +540,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
                       onChange={(e) => setRow(idx, { loan_input: e.target.value })}
                       onBlur={() => handleClientIdBlur(idx)}
                     />
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                      {r.loan_id
-                        ? `Préstamo #${r.loan_id}`
-                        : r.touched && !r.client_name
-                        ? "Cliente / préstamo no encontrado"
-                        : ""}
-                    </p>
+                    <p className="text-[11px] text-muted-foreground mt-1">{getLoanHintText(r)}</p>
                   </div>
 
                   {/* Nombre */}
@@ -536,8 +548,8 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
                     <Input value={r.client_name} disabled placeholder="Nombre del cliente" />
                     {r.remaining_balance != null && (
                       <p className="text-[11px] text-muted-foreground mt-1">
-                        Saldo: ${toNumber(r.remaining_balance).toLocaleString("es-MX")} · Sugerido: $
-                        {toNumber(r.weekly_suggested || 0).toLocaleString("es-MX")}
+                        Saldo: ${toNumber(r.remaining_balance).toLocaleString("es-MX")} · Sugerido:
+                        ${toNumber(r.weekly_suggested || 0).toLocaleString("es-MX")}
                       </p>
                     )}
                   </div>
@@ -593,7 +605,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
 
           {/* Footer */}
           <DialogFooter className="p-5 gap-2 border-t">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
+            <Button variant="outline" onClick={() => onOpenChange?.(false)}>
               Cancelar
             </Button>
             <Button onClick={handleSubmit} disabled={submitting || effectiveRows.length === 0}>
@@ -605,3 +617,8 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
     </Dialog>
   );
 }
+
+BulkPaymentDialog.propTypes = {
+  open: PropTypes.bool.isRequired,
+  onOpenChange: PropTypes.func.isRequired,
+};
