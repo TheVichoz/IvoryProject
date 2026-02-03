@@ -1,5 +1,6 @@
 // src/components/Layout.jsx
 import React from 'react';
+import PropTypes from 'prop-types';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
@@ -11,6 +12,7 @@ import {
   Settings as SettingsIcon,
   TrendingUp,
 } from 'lucide-react';
+
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +21,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useData } from '@/contexts/DataContext';
 import { Button } from '@/components/ui/button';
@@ -34,12 +37,16 @@ const Layout = ({ children }) => {
   const avatarUrl =
     profile?.avatar_url ||
     `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName)}`;
+
   const unreadNotifications = notifications.filter((n) => !n.read).length;
 
   const handleLogout = async () => {
     await signOut();
     navigate('/login', { replace: true });
-    toast({ title: 'Sesión cerrada', description: 'Has cerrado sesión exitosamente.' });
+    toast({
+      title: 'Sesión cerrada',
+      description: 'Has cerrado sesión exitosamente.',
+    });
   };
 
   const handleNotificationClick = () => {
@@ -64,6 +71,7 @@ const Layout = ({ children }) => {
 
         <div className="flex w-full items-center gap-4 md:ml-auto md:gap-2 lg:gap-4">
           <div className="ml-auto flex-1 sm:flex-initial" />
+
           <Button
             variant="ghost"
             size="icon"
@@ -81,21 +89,24 @@ const Layout = ({ children }) => {
               <Button variant="ghost" size="icon" className="rounded-full">
                 <Avatar className="h-8 w-8">
                   <AvatarImage src={avatarUrl} alt={displayName} />
-                  <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
+                  <AvatarFallback>
+                    {displayName.charAt(0).toUpperCase()}
+                  </AvatarFallback>
                 </Avatar>
               </Button>
             </DropdownMenuTrigger>
+
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Mi Cuenta</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                // 👇 apuntamos a la ruta dentro del layout del admin
-                onSelect={() => navigate('/admin/settings')}
-              >
+
+              <DropdownMenuItem onSelect={() => navigate('/admin/settings')}>
                 <SettingsIcon className="mr-2 h-4 w-4" />
                 <span>Configuración</span>
               </DropdownMenuItem>
+
               <DropdownMenuSeparator />
+
               <DropdownMenuItem
                 onClick={handleLogout}
                 className="text-destructive focus:text-destructive focus:bg-destructive/10"
@@ -113,8 +124,13 @@ const Layout = ({ children }) => {
   );
 };
 
+Layout.propTypes = {
+  children: PropTypes.node.isRequired,
+};
+
 const NavLink = ({ to, children, icon: Icon }) => {
   const location = useLocation();
+
   const isActive =
     location.pathname === `/admin${to}` ||
     (location.pathname.startsWith(`/admin${to}`) && to !== '/');
@@ -136,6 +152,12 @@ const NavLink = ({ to, children, icon: Icon }) => {
       )}
     </Link>
   );
+};
+
+NavLink.propTypes = {
+  to: PropTypes.string.isRequired,
+  children: PropTypes.node.isRequired,
+  icon: PropTypes.elementType.isRequired,
 };
 
 export const AdminNav = () => {
