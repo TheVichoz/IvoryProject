@@ -1,5 +1,6 @@
 // src/App.jsx
 import React from 'react';
+import PropTypes from 'prop-types';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet';
 import { Toaster } from '@/components/ui/toaster';
@@ -29,6 +30,9 @@ import Settings from '@/pages/Settings';
 // 👇 Overlay global
 import SuccessOverlay from '@/components/ui/SuccessOverlay';
 
+/* =======================
+   Loader global
+======================= */
 const FullScreenLoader = () => (
   <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-800">
     <div className="flex flex-col items-center gap-4">
@@ -38,37 +42,52 @@ const FullScreenLoader = () => (
   </div>
 );
 
-// Decide adónde enviar tras login
+/* =======================
+   Redirect inicial
+======================= */
 function HomeRedirect() {
   const { session, profile, loading } = useAuth();
+
   if (loading) return <FullScreenLoader />;
 
   // No autenticado -> Login
   if (!session) return <Login />;
 
-  // Autenticado pero aún cargando perfil
+  // Autenticado pero perfil aún cargando
   if (!profile) return <FullScreenLoader />;
 
   const role = profile.role;
   const isStaff = role === 'ADMIN_GENERAL' || role === 'ADMIN_RUTA';
 
-  // Solo staff entra al área /admin, cualquier otro rol cae a login
+  // Solo staff entra a /admin
   return <Navigate to={isStaff ? '/admin' : '/login'} replace />;
 }
 
-// Solo staff
+/* =======================
+   Gate solo staff
+======================= */
 function StaffGate({ children }) {
   const { session, profile, loading } = useAuth();
+
   if (loading) return <FullScreenLoader />;
   if (!session) return <Navigate to="/login" replace />;
 
   const role = profile?.role;
   const allowed = role === 'ADMIN_GENERAL' || role === 'ADMIN_RUTA';
+
   if (!allowed) return <Navigate to="/login" replace />;
 
   return children;
 }
 
+// ✅ FIX SonarQube: validar children
+StaffGate.propTypes = {
+  children: PropTypes.node.isRequired,
+};
+
+/* =======================
+   Rutas admin
+======================= */
 const AdminRoutes = () => (
   <Layout>
     <Routes>
@@ -90,12 +109,16 @@ const AdminRoutes = () => (
   </Layout>
 );
 
+/* =======================
+   App principal
+======================= */
 function App() {
   return (
     <Router>
-      {/* Toaster de shadcn */}
+      {/* Toaster shadcn */}
       <Toaster />
-      {/* Overlay global para “pago/cliente registrado” */}
+
+      {/* Overlay global */}
       <SuccessOverlay />
 
       <AuthProvider>
@@ -105,13 +128,13 @@ function App() {
           </Helmet>
 
           <Routes>
-            {/* Inicio decide según rol */}
+            {/* Inicio */}
             <Route path="/" element={<HomeRedirect />} />
 
-            {/* Login público */}
+            {/* Login */}
             <Route path="/login" element={<Login />} />
 
-            {/* Bloquear rutas de registro y redirigir al login */}
+            {/* Bloquear registros */}
             <Route path="/register" element={<Navigate to="/login" replace />} />
             <Route path="/signup" element={<Navigate to="/login" replace />} />
             <Route path="/sign-up" element={<Navigate to="/login" replace />} />
@@ -127,7 +150,7 @@ function App() {
               }
             />
 
-            {/* Configuración protegida para autenticados (si la usas fuera de /admin) */}
+            {/* Settings fuera de admin */}
             <Route
               path="/settings"
               element={
