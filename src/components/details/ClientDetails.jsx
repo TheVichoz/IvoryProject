@@ -40,7 +40,9 @@ function normalizeDueDate(loan) {
 }
 
 function getSemaphoreForClient(client, loans) {
-  if (!client || client.status !== 'active') return null;
+  // ✅ Sonar S6582: usar optional chaining
+  if (client?.status !== 'active') return null;
+
   if (!Array.isArray(loans) || loans.length === 0) return null;
 
   const activeLoan = loans.find(
