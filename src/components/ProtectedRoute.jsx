@@ -1,4 +1,6 @@
+// src/components/ProtectedRoute.jsx
 import React from 'react';
+import PropTypes from 'prop-types';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 
@@ -34,6 +36,11 @@ const ProtectedRoute = ({ children, requiredRole }) => {
   }
 
   return children;
+};
+
+ProtectedRoute.propTypes = {
+  children: PropTypes.node.isRequired,
+  requiredRole: PropTypes.string,
 };
 
 export default ProtectedRoute;
