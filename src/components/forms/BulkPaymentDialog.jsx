@@ -22,6 +22,7 @@ const toISODate = (value) => {
   if (isNaN(d.getTime())) return "";
   return d.toISOString().split("T")[0];
 };
+
 const addDaysISO = (yyyyMmDd, days) => {
   if (!yyyyMmDd) return "";
   const d = new Date(`${yyyyMmDd}T00:00:00`);
@@ -29,10 +30,12 @@ const addDaysISO = (yyyyMmDd, days) => {
   d.setDate(d.getDate() + Number(days || 0));
   return d.toISOString().split("T")[0];
 };
+
 const toNumber = (n) => {
   const x = Number(n);
   return Number.isFinite(x) ? x : 0;
 };
+
 const computeInitialRemaining = (loan) => {
   if (loan?.remaining_balance !== null && loan?.remaining_balance !== undefined) {
     return toNumber(loan.remaining_balance);
@@ -45,30 +48,192 @@ const computeInitialRemaining = (loan) => {
 
 // fechas: texto dd/mm/aaaa <-> ISO
 const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
+
 const toDisplayDDMMYYYY = (iso) => {
   if (!iso) return "";
   const [y, m, d] = iso.split("-");
   if (!y || !m || !d) return "";
   return `${pad2(Number(d))}/${pad2(Number(m))}/${y}`;
 };
+
 const toISOFromFlexible = (txt) => {
   if (!txt) return "";
   const s = txt.trim();
+
   if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)) {
     const [y, m, d] = s.split("-").map(Number);
     if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return `${y}-${pad2(m)}-${pad2(d)}`;
     return "";
   }
+
   const m1 = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
   if (m1) {
-    const d = Number(m1[1]),
-      m = Number(m1[2]),
-      y = Number(m1[3]);
+    const d = Number(m1[1]);
+    const m = Number(m1[2]);
+    const y = Number(m1[3]);
     if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return `${y}-${pad2(m)}-${pad2(d)}`;
   }
+
   return "";
 };
 /* ================================================= */
+
+/* ============== Helpers para Submit (Sonar) ============== */
+const groupRowsByLoanId = (rows) => {
+  const map = new Map();
+  for (const r of rows) {
+    if (!map.has(r.loan_id)) map.set(r.loan_id, []);
+    map.get(r.loan_id).push(r);
+  }
+  return map;
+};
+
+const getLoanTermWeeks = (loan) => {
+  const fromTermWeeks = Number(loan?.term_weeks);
+  if (Number.isFinite(fromTermWeeks) && fromTermWeeks > 0) return fromTermWeeks;
+
+  const termMatch = String(loan?.term || "").match(/\d+/)?.[0];
+  const fromTerm = Number(termMatch);
+  if (Number.isFinite(fromTerm) && fromTerm > 0) return fromTerm;
+
+  return 14;
+};
+
+const fetchExistingPayments = async (loanIds) => {
+  const { data, error } = await supabase
+    .from("payments")
+    .select("loan_id, week, status")
+    .in("loan_id", loanIds);
+
+  if (error) throw error;
+  return data || [];
+};
+
+const buildOccupiedAndPaidWeeks = (payments, termWeeks) => {
+  const occupiedWeeks = new Set();
+  const paidWeeks = new Set();
+
+  for (const p of payments) {
+    const w = Number(p.week || 0);
+    if (w < 1 || w > termWeeks) continue;
+
+    occupiedWeeks.add(w);
+
+    const st = String(p.status || "").toLowerCase();
+    if (st === "paid" || st === "pagado") paidWeeks.add(w);
+  }
+
+  return { occupiedWeeks, paidWeeks };
+};
+
+const findNextFreeWeek = (termWeeks, paidWeeks, occupiedWeeks, batchAssigned) => {
+  for (let w = 1; w <= termWeeks; w++) {
+    const isFree = !paidWeeks.has(w) && !occupiedWeeks.has(w) && !batchAssigned.has(w);
+    if (isFree) return w;
+  }
+  return null;
+};
+
+const assignWeeksForAllLoans = ({ loanIds, byLoan, payData, activeLoans }) => {
+  const weekByRow = new Map();
+  const noWeeks = [];
+
+  for (const loanId of loanIds) {
+    const rowsForLoan = byLoan.get(loanId) || [];
+    const loan = activeLoans.find((l) => l.id === loanId);
+
+    const termWeeks = Math.max(1, getLoanTermWeeks(loan));
+    const existing = payData.filter((p) => p.loan_id === loanId);
+    const { occupiedWeeks, paidWeeks } = buildOccupiedAndPaidWeeks(existing, termWeeks);
+
+    const batchAssigned = new Set();
+
+    for (const r of rowsForLoan) {
+      const week = findNextFreeWeek(termWeeks, paidWeeks, occupiedWeeks, batchAssigned);
+
+      if (week == null) {
+        noWeeks.push(`Préstamo #${loanId} (${r.client_name || "sin nombre"}) sin semanas libres`);
+        continue;
+      }
+
+      batchAssigned.add(week);
+      weekByRow.set(r, week);
+    }
+  }
+
+  return { weekByRow, noWeeks };
+};
+
+const buildRowsToInsert = (effectiveRows, weekByRow) =>
+  effectiveRows.map((r) => ({
+    loan_id: r.loan_id,
+    client_id: Number(r.client_id),
+    client_name: r.client_name || null,
+    amount: toNumber(r.amount),
+    payment_date: r.date, // ISO
+    status: "paid",
+    week: weekByRow.get(r),
+  }));
+
+const insertPayments = async (rowsToInsert) => {
+  const { error } = await supabase.from("payments").insert(rowsToInsert);
+  if (error) throw error;
+};
+
+const computeNextPaymentDate = (loan, paymentISO) => {
+  const scheduledBase =
+    loan?.next_payment_date ||
+    (loan?.start_date ? addDaysISO(loan.start_date, 7) : null) ||
+    paymentISO;
+
+  return addDaysISO(scheduledBase, 7);
+};
+
+const updateLoanCompleted = async (loanId, dueDateISO) => {
+  const { error } = await supabase
+    .from("loans")
+    .update({
+      status: "completed",
+      remaining_balance: 0,
+      next_payment_date: null,
+      due_date: dueDateISO,
+    })
+    .eq("id", loanId);
+
+  if (error) throw error;
+};
+
+const updateLoanActive = async (loanId, nextPaymentISO, newRemaining) => {
+  const { error } = await supabase
+    .from("loans")
+    .update({
+      next_payment_date: nextPaymentISO,
+      remaining_balance: newRemaining,
+    })
+    .eq("id", loanId);
+
+  if (error) throw error;
+};
+
+const updateLoansAfterPayments = async ({ effectiveRows, activeLoans }) => {
+  for (const r of effectiveRows) {
+    const loan = activeLoans.find((l) => l.id === r.loan_id);
+    if (!loan) continue;
+
+    const prevRemaining = toNumber(computeInitialRemaining(loan));
+    const paid = toNumber(r.amount);
+    const newRemaining = Math.max(0, prevRemaining - paid);
+
+    if (newRemaining === 0) {
+      await updateLoanCompleted(r.loan_id, r.date);
+      continue;
+    }
+
+    const nextPaymentISO = computeNextPaymentDate(loan, r.date);
+    await updateLoanActive(r.loan_id, nextPaymentISO, newRemaining);
+  }
+};
+/* ========================================================= */
 
 /* =================== Componente =================== */
 export default function BulkPaymentDialog({ open, onOpenChange }) {
@@ -116,9 +281,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
 
       // Buscar el préstamo activo por ID
       const loan = activeLoans.find((l) => String(l.id) === typed);
-      const client = loan
-        ? clients.find((c) => String(c.id) === String(loan.client_id))
-        : null;
+      const client = loan ? clients.find((c) => String(c.id) === String(loan.client_id)) : null;
 
       if (!loan || !client) {
         Object.assign(r, {
@@ -157,6 +320,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
 
   // Fecha por texto
   const handleDateTextChange = (idx, val) => setRow(idx, { dateInput: val });
+
   const handleDateBlur = (idx) =>
     setRows((prev) => {
       const r = { ...prev[idx] };
@@ -187,9 +351,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
   const addRow = () => setRows((prev) => [...prev, makeEmptyRow()]);
   const removeRow = (idx) => setRows((prev) => prev.filter((_, i) => i !== idx));
 
-  const effectiveRows = rows.filter(
-    (r) => r.valid && r.loan_id && toNumber(r.amount) > 0 && r.date
-  );
+  const effectiveRows = rows.filter((r) => r.valid && r.loan_id && toNumber(r.amount) > 0 && r.date);
   const totalAmount = effectiveRows.reduce((s, r) => s + toNumber(r.amount), 0);
 
   // Aplica fecha global a TODAS las filas
@@ -204,6 +366,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
 
   // Global por texto / selector
   const handleGlobalDateChange = (val) => setGlobalDateInput(val);
+
   const handleGlobalDateBlur = () => {
     const iso = toISOFromFlexible(globalDateInput);
     if (iso) {
@@ -211,6 +374,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
       setGlobalDateInput(toDisplayDDMMYYYY(iso));
     }
   };
+
   const handleGlobalNativeDate = (isoVal) => {
     const iso = toISOFromFlexible(isoVal);
     if (iso) {
@@ -219,7 +383,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
     }
   };
 
-  /* ================= Submit con SEMANAS ================= */
+  /* ================= Submit con SEMANAS (Refactor) ================= */
   const handleSubmit = async () => {
     if (effectiveRows.length === 0) {
       toast({
@@ -231,125 +395,28 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
     }
 
     setSubmitting(true);
+
     try {
-      // 1) Agrupar filas por préstamo
-      const byLoan = new Map(); // loan_id -> filas
-      for (const r of effectiveRows) {
-        if (!byLoan.has(r.loan_id)) byLoan.set(r.loan_id, []);
-        byLoan.get(r.loan_id).push(r);
-      }
+      const byLoan = groupRowsByLoanId(effectiveRows);
       const loanIds = Array.from(byLoan.keys());
 
-      // 2) Traer pagos existentes (para saber qué semanas están ocupadas)
-      const { data: payData, error: payErr } = await supabase
-        .from("payments")
-        .select("loan_id, week, status")
-        .in("loan_id", loanIds);
-      if (payErr) throw payErr;
+      const payData = await fetchExistingPayments(loanIds);
 
-      // 3) Asignar semanas libres respetando term_weeks
-      const assignedWeeksPerLoan = new Map();
-      const weekByRow = new Map();
-      const noWeeks = [];
-
-      for (const loanId of loanIds) {
-        const rowsForLoan = byLoan.get(loanId);
-        const loan = activeLoans.find((l) => l.id === loanId);
-        const termWeeks = Math.max(
-          1,
-          Number(
-            loan?.term_weeks ??
-              (loan?.term ? Number(String(loan.term).match(/\d+/)?.[0]) : 14)
-          ) || 14
-        );
-
-        const existing = (payData || []).filter((p) => p.loan_id === loanId);
-        const paidWeeks = new Set();
-        const occupiedWeeks = new Set();
-        for (const p of existing) {
-          const w = Number(p.week || 0);
-          if (w >= 1 && w <= termWeeks) {
-            occupiedWeeks.add(w);
-            const st = String(p.status || "").toLowerCase();
-            if (st === "paid" || st === "pagado") paidWeeks.add(w);
-          }
-        }
-        assignedWeeksPerLoan.set(loanId, new Set());
-
-        for (const r of rowsForLoan) {
-          const batchAssigned = assignedWeeksPerLoan.get(loanId);
-          const week = (() => {
-            for (let w = 1; w <= termWeeks; w++) {
-              if (!paidWeeks.has(w) && !occupiedWeeks.has(w) && !batchAssigned.has(w)) return w;
-            }
-            return null;
-          })();
-
-          if (week == null) {
-            noWeeks.push(`Préstamo #${loanId} (${r.client_name || "sin nombre"}) sin semanas libres`);
-          } else {
-            weekByRow.set(r, week);
-            batchAssigned.add(week);
-          }
-        }
-      }
+      const { weekByRow, noWeeks } = assignWeeksForAllLoans({
+        loanIds,
+        byLoan,
+        payData,
+        activeLoans,
+      });
 
       if (noWeeks.length > 0) {
         throw new Error(`No hay semanas disponibles para:\n• ${noWeeks.join("\n• ")}`);
       }
 
-      // 4) Insert masivo en payments (incluyendo WEEK y CLIENT_NAME)
-      const rowsToInsert = effectiveRows.map((r) => ({
-        loan_id: r.loan_id,
-        client_id: Number(r.client_id),
-        client_name: r.client_name || null,
-        amount: toNumber(r.amount),
-        payment_date: r.date, // ISO
-        status: "paid",
-        week: weekByRow.get(r), // semana asignada
-      }));
+      const rowsToInsert = buildRowsToInsert(effectiveRows, weekByRow);
+      await insertPayments(rowsToInsert);
 
-      const { error: insErr } = await supabase.from("payments").insert(rowsToInsert);
-      if (insErr) throw insErr;
-
-      // 5) Actualizar préstamos (next_payment_date semanal y saldo)
-      for (const r of effectiveRows) {
-        const loan = activeLoans.find((l) => l.id === r.loan_id);
-        if (!loan) continue;
-
-        const prevRemaining = toNumber(computeInitialRemaining(loan));
-        let newRemaining = prevRemaining - toNumber(r.amount);
-        if (newRemaining < 0) newRemaining = 0;
-
-        if (newRemaining === 0) {
-          const { error: updErr } = await supabase
-            .from("loans")
-            .update({
-              status: "completed",
-              remaining_balance: 0,
-              next_payment_date: null,
-              due_date: r.date,
-            })
-            .eq("id", r.loan_id);
-          if (updErr) throw updErr;
-        } else {
-          // base programada: next existente -> +7; si no hay, start_date + 7; si tampoco, fecha del pago
-          const scheduledBase =
-            loan.next_payment_date ||
-            (loan.start_date ? addDaysISO(loan.start_date, 7) : null) ||
-            r.date;
-          const next = addDaysISO(scheduledBase, 7);
-
-          const { error: updErr } = await supabase
-            .from("loans")
-            .update({
-              next_payment_date: next,
-              remaining_balance: newRemaining,
-            })
-            .eq("id", r.loan_id);
-          if (updErr) throw updErr;
-        }
-      }
+      await updateLoansAfterPayments({ effectiveRows, activeLoans });
 
       toast({
         title: "Pagos registrados",
@@ -366,7 +433,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
       toast({
         variant: "destructive",
         title: "Error al registrar pagos",
-        description: err.message || "Intenta nuevamente.",
+        description: err?.message || "Intenta nuevamente.",
       });
     } finally {
       setSubmitting(false);
@@ -423,12 +490,11 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
               <div className="sm:col-span-2 flex items-end justify-end gap-4">
                 <div className="text-sm">
                   <div>
-                    <b>Filas válidas:</b>{" "}
-                    {rows.filter((r) => r.valid && r.loan_id).length} / {rows.length}
+                    <b>Filas válidas:</b> {rows.filter((r) => r.valid && r.loan_id).length} /{" "}
+                    {rows.length}
                   </div>
                   <div>
-                    <b>Total a cobrar:</b> $
-                    {Number(totalAmount || 0).toLocaleString("es-MX")}
+                    <b>Total a cobrar:</b> ${Number(totalAmount || 0).toLocaleString("es-MX")}
                   </div>
                 </div>
               </div>
@@ -447,10 +513,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
               </div>
 
               {rows.map((r, idx) => (
-                <div
-                  key={idx}
-                  className="grid grid-cols-12 gap-2 px-5 py-2 items-center border-t"
-                >
+                <div key={idx} className="grid grid-cols-12 gap-2 px-5 py-2 items-center border-t">
                   {/* ID cliente (pero ahora se captura ID de PRÉSTAMO) */}
                   <div className="col-span-2">
                     <Input
@@ -473,9 +536,7 @@ export default function BulkPaymentDialog({ open, onOpenChange }) {
                     <Input value={r.client_name} disabled placeholder="Nombre del cliente" />
                     {r.remaining_balance != null && (
                       <p className="text-[11px] text-muted-foreground mt-1">
-                        Saldo: $
-                        {toNumber(r.remaining_balance).toLocaleString("es-MX")} ·
-                        Sugerido: $
+                        Saldo: ${toNumber(r.remaining_balance).toLocaleString("es-MX")} · Sugerido: $
                         {toNumber(r.weekly_suggested || 0).toLocaleString("es-MX")}
                       </p>
                     )}
