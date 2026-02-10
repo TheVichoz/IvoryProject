@@ -65,6 +65,12 @@ const selectLoansQuery = () =>
     `)
     .order('created_at', { ascending: false });
 
+/**
+ * ✅ IMPORTANTE:
+ * NO usar selectPaymentsQuery() directo para llenar contexto si hay muchos pagos,
+ * porque PostgREST/Supabase puede cortar el resultado (p. ej. ~1000 filas).
+ * Por eso paginamos.
+ */
 const selectPaymentsQuery = () =>
   supabase.from('payments').select('*').order('created_at', { ascending: false });
 
@@ -278,6 +284,33 @@ const recomputeNextDateAndBalance = async (loanId) => {
 };
 // ---------------------------------------------------
 
+/**
+ * ✅ FIX: traer TODOS los pagos paginando
+ * (evita que Supabase “corte” el resultado cuando hay muchos registros)
+ */
+const fetchAllPayments = async () => {
+  const PAGE = 1000;
+  let from = 0;
+  let all = [];
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('payments')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(from, from + PAGE - 1);
+
+    if (error) throw error;
+
+    all = all.concat(data || []);
+    if (!data || data.length < PAGE) break;
+
+    from += PAGE;
+  }
+
+  return all;
+};
+
 export const DataProvider = ({ children }) => {
   const { session } = useAuth();
   const [clients, setClients] = useState([]);
@@ -303,25 +336,25 @@ export const DataProvider = ({ children }) => {
 
     setLoading(true);
     try {
-      const [clientsRes, loansRes, paymentsRes, guaranteesRes, notificationsRes] =
+      // ✅ Pagos con paginación para no perder historial
+      const [clientsRes, loansRes, guaranteesRes, notificationsRes, paymentsData] =
         await Promise.all([
           selectClientsQuery(),
           selectLoansQuery(),
-          selectPaymentsQuery(),
           selectGuaranteesQuery(),
           selectNotificationsQuery(),
+          fetchAllPayments(),
         ]);
 
       if (clientsRes.error) throw clientsRes.error;
       if (loansRes.error) throw loansRes.error;
-      if (paymentsRes.error) throw paymentsRes.error;
       if (guaranteesRes.error) throw guaranteesRes.error;
       if (notificationsRes.error) throw notificationsRes.error;
 
       applyFetchedState({
         clientsData: clientsRes.data,
         loansData: loansRes.data,
-        paymentsData: paymentsRes.data,
+        paymentsData, // ✅ ya viene completo
         guaranteesData: guaranteesRes.data,
         notificationsData: notificationsRes.data,
       });
@@ -405,7 +438,8 @@ export const DataProvider = ({ children }) => {
     if (curErr) throw curErr;
 
     const amount = Number(updates.amount ?? updates.monto ?? current?.amount ?? 0);
-    const start_date = updates.start_date || updates.fecha || current?.start_date || new Date().toISOString().slice(0, 10);
+    const start_date =
+      updates.start_date || updates.fecha || current?.start_date || new Date().toISOString().slice(0, 10);
 
     let client_name = updates.client_name ?? current?.client_name ?? null;
     const client_id = updates.client_id ?? current?.client_id ?? null;

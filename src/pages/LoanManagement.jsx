@@ -1,5 +1,5 @@
 // src/pages/LoanManagement.jsx
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Helmet } from 'react-helmet';
 import {
@@ -33,9 +33,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 
 import BulkPaymentDialog from '@/components/forms/BulkPaymentDialog';
 import { useRole } from '@/hooks/useRole';
+
+// ✅ FIX HISTORIAL COMPLETO: fetch directo a Supabase cuando se busca por loan_id
+import { supabase } from '@/lib/customSupabaseClient';
 
 /* =============== helpers =============== */
 const OK_PAYMENT_STATUS = new Set(['paid', 'pagado', 'completed', 'success', 'confirmed']);
@@ -474,6 +478,10 @@ const LoanManagement = () => {
   // historial (sidebar) búsqueda
   const [searchPayments, setSearchPayments] = useState('');
 
+  // ✅ pagos completos cuando se busca por loan_id
+  const [loanSearchPayments, setLoanSearchPayments] = useState([]);
+  const [loanSearchLoading, setLoanSearchLoading] = useState(false);
+
   // renovación
   const [isRenewOpen, setIsRenewOpen] = useState(false);
   const [renewLoan, setRenewLoan] = useState(null);
@@ -504,25 +512,24 @@ const LoanManagement = () => {
   };
 
   // pagos agregados para tarjetas
-const paidByLoanId = useMemo(() => {
-  const map = new Map();
-  (payments ?? []).forEach((p) => {
-    if (!p) return;
+  const paidByLoanId = useMemo(() => {
+    const map = new Map();
+    (payments ?? []).forEach((p) => {
+      if (!p) return;
 
-    const rawLoanId = p.loan_id ?? p.prestamo_id ?? p.loanId;
-    if (!rawLoanId) return;
+      const rawLoanId = p.loan_id ?? p.prestamo_id ?? p.loanId;
+      if (!rawLoanId) return;
 
-    const loanId = String(rawLoanId); // ✅ normaliza SIEMPRE
-    const amt = num(p.amount ?? p.monto ?? p.payment_amount ?? p.importe);
+      const loanId = String(rawLoanId); // ✅ normaliza SIEMPRE
+      const amt = num(p.amount ?? p.monto ?? p.payment_amount ?? p.importe);
 
-    const st = String(p.status || '').toLowerCase();
-    if (!p.status || OK_PAYMENT_STATUS.has(st)) {
-      map.set(loanId, (map.get(loanId) ?? 0) + amt);
-    }
-  });
-  return map;
-}, [payments]);
-
+      const st = String(p.status || '').toLowerCase();
+      if (!p.status || OK_PAYMENT_STATUS.has(st)) {
+        map.set(loanId, (map.get(loanId) ?? 0) + amt);
+      }
+    });
+    return map;
+  }, [payments]);
 
   // préstamos enriquecidos
   const enrichedLoans = useMemo(() => {
@@ -533,18 +540,21 @@ const paidByLoanId = useMemo(() => {
       const weeks = num(l.term_weeks ?? l.term ?? l.weeks) || FIXED_WEEKS;
       const ratePct = num(l.interest_rate) || FIXED_RATE;
       const total_amount = num(l.total_amount) || amount * (1 + ratePct / 100);
-const paidFromMap = paidByLoanId.has(String(l.id)) ? num(paidByLoanId.get(String(l.id))) : 0;
 
-// ✅ prioridad: pagos reales (map) > campo guardado
-const total_paid = paidFromMap > 0 ? paidFromMap : num(l.total_paid ?? l.total_paid_amount ?? l.paid_amount);
+      const paidFromMap = paidByLoanId.has(String(l.id)) ? num(paidByLoanId.get(String(l.id))) : 0;
 
-// ✅ saldo SIEMPRE derivado del total - pagado (evita inversión)
-const remaining_balance = Math.max(total_amount - total_paid, 0);
+      // ✅ prioridad: pagos reales (map) > campo guardado
+      const total_paid = paidFromMap > 0
+        ? paidFromMap
+        : num(l.total_paid ?? l.total_paid_amount ?? l.paid_amount);
 
-const weekly_payment =
-  num(l.weekly_payment) > 0
-    ? num(l.weekly_payment)
-    : (weeks > 0 ? Math.ceil(total_amount / weeks) : 0);
+      // ✅ saldo SIEMPRE derivado del total - pagado (evita inversión)
+      const remaining_balance = Math.max(total_amount - total_paid, 0);
+
+      const weekly_payment =
+        num(l.weekly_payment) > 0
+          ? num(l.weekly_payment)
+          : (weeks > 0 ? Math.ceil(total_amount / weeks) : 0);
 
       const enriched = {
         ...l,
@@ -577,9 +587,9 @@ const weekly_payment =
   const displayLoans = useMemo(() => {
     return (displayLoansRaw ?? []).map(l => {
       const total = num(l.total_amount ?? l.amount);
-const paidAgg = paidByLoanId.has(String(l.id))
-  ? num(paidByLoanId.get(String(l.id)))
-  : num(l.paid_amount);
+      const paidAgg = paidByLoanId.has(String(l.id))
+        ? num(paidByLoanId.get(String(l.id)))
+        : num(l.paid_amount);
 
       const remaining = Math.max(total - paidAgg, 0);
 
@@ -601,18 +611,80 @@ const paidAgg = paidByLoanId.has(String(l.id))
     String(l.id ?? '').includes(searchTerm)
   );
 
-  // historial de pagos en sidebar (búsqueda por nombre vivo también)
-  const displayPayments = payments || [];
+  // =============================
+  // ✅ HISTORIAL: mostrar completo
+  // =============================
+  const searchPaymentsRaw = String(searchPayments || '').trim();
+  const isSearching = searchPaymentsRaw.length > 0;
+  const isLoanIdSearch = /^\d+$/.test(searchPaymentsRaw);
+
+  useEffect(() => {
+    const run = async () => {
+      if (!isLoanIdSearch) {
+        setLoanSearchPayments([]);
+        setLoanSearchLoading(false);
+        return;
+      }
+
+      const loanIdNum = Number(searchPaymentsRaw);
+      if (!Number.isFinite(loanIdNum) || loanIdNum <= 0) {
+        setLoanSearchPayments([]);
+        setLoanSearchLoading(false);
+        return;
+      }
+
+      setLoanSearchLoading(true);
+
+      const { data, error } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('loan_id', loanIdNum)
+        .order('week', { ascending: true })
+        .order('payment_date', { ascending: true });
+
+      if (error) {
+        setLoanSearchPayments([]);
+        toast({
+          variant: 'destructive',
+          title: 'Error cargando historial',
+          description: error.message,
+        });
+      } else {
+        setLoanSearchPayments(data || []);
+      }
+
+      setLoanSearchLoading(false);
+    };
+
+    run();
+  }, [isLoanIdSearch, searchPaymentsRaw]);
+
+  const displayPayments = isLoanIdSearch ? loanSearchPayments : (payments || []);
+
   const filteredPayments = (displayPayments || [])
     .filter((p) => {
+      const loanIdStr = String(p.loan_id ?? '');
       const liveName = getDisplayName(p);
+
+      // ✅ Si buscan un ID numérico: EXACTO
+      if (isLoanIdSearch) return loanIdStr === searchPaymentsRaw;
+
+      // ✅ búsqueda normal
+      const q = searchPaymentsRaw.toLowerCase();
       return (
-        ((liveName || '').toLowerCase().includes(searchPayments.toLowerCase())) ||
-        ((p.client_name || '').toLowerCase().includes(searchPayments.toLowerCase())) ||
-        String(p.loan_id || '').includes(searchPayments)
+        ((liveName || '').toLowerCase().includes(q)) ||
+        ((p.client_name || '').toLowerCase().includes(q)) ||
+        loanIdStr.includes(searchPaymentsRaw)
       );
     })
     .sort((a, b) => {
+      // ✅ ID: ordenar por week asc (1..N)
+      if (isLoanIdSearch) {
+        const wa = Number(a.week ?? 0);
+        const wb = Number(b.week ?? 0);
+        return wa - wb;
+      }
+      // ✅ normal: por fecha desc
       const tb = parseDate(b?.payment_date)?.getTime() ?? 0;
       const ta = parseDate(a?.payment_date)?.getTime() ?? 0;
       return tb - ta;
@@ -946,7 +1018,6 @@ const paidAgg = paidByLoanId.has(String(l.id))
                   <LoanCard
                     key={loan.id}
                     loan={loan}
-                    // ✅ FIX: antes era setSelectedLoan (solo setea y NO abre modal)
                     onSelect={handleSelectLoan}
                     onEdit={openEditAmount}
                     onDelete={() => setLoanToDelete(loan)}
@@ -986,29 +1057,35 @@ const paidAgg = paidByLoanId.has(String(l.id))
                   />
                 </div>
               </CardHeader>
-              <CardContent className="lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto pr-1">
-                {loading ? (
-                  <div className="text-center py-8">Cargando pagos...</div>
-                ) : (
-                  <div className="space-y-3">
-                    {filteredPayments.length > 0 ? (
-                      filteredPayments.map((payment) => (
-                        <PaymentCardRow
-                          key={payment.id}
-                          payment={payment}
-                          onEdit={(p) => { setEditingPayment(p); setIsPaymentFormOpen(true); }}
-                          onDelete={(p) => setPaymentToDelete(p)}
-                          canWrite={canWrite}
-                          isAdmin={isAdmin}
-                        />
-                      ))
-                    ) : (
-                      <div className="text-center py-10 text-muted-foreground">
-                        No hay pagos para mostrar.
-                      </div>
-                    )}
-                  </div>
-                )}
+
+              {/* ✅ FIX: Scroll SIEMPRE (sin max-h-none) */}
+              <CardContent className="pr-1">
+                <ScrollArea className="h-[calc(100vh-220px)] pr-3">
+                  {(loading || loanSearchLoading) ? (
+                    <div className="text-center py-8">Cargando pagos...</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {filteredPayments.length > 0 ? (
+                        filteredPayments.map((payment) => (
+                          <PaymentCardRow
+                            key={payment.id}
+                            payment={payment}
+                            onEdit={(p) => { setEditingPayment(p); setIsPaymentFormOpen(true); }}
+                            onDelete={(p) => setPaymentToDelete(p)}
+                            canWrite={canWrite}
+                            isAdmin={isAdmin}
+                          />
+                        ))
+                      ) : (
+                        <div className="text-center py-10 text-muted-foreground">
+                          No hay pagos para mostrar.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <ScrollBar orientation="vertical" />
+                </ScrollArea>
               </CardContent>
             </Card>
           </aside>
