@@ -3,16 +3,11 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter
-} from '@/components/ui/dialog';
+import { DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/customSupabaseClient';
-import { Camera, Trash2 } from 'lucide-react';
+import { Camera, Trash2, PlusCircle, Save } from 'lucide-react';
 
 /* ============================
    Helpers de fecha
@@ -45,7 +40,6 @@ async function compressImage(
     try {
       if (window.createImageBitmap) return await createImageBitmap(file);
     } catch {}
-    // Fallback con <img>
     const img = await new Promise((res, rej) => {
       const i = new Image();
       i.onload = () => res(i);
@@ -79,7 +73,6 @@ async function compressImage(
     }
   });
 
-  // DataURL para preview
   const dataUrl = await new Promise((resolve) => {
     if (canvas.toDataURL) {
       resolve(canvas.toDataURL(type, quality));
@@ -92,12 +85,10 @@ async function compressImage(
     }
   });
 
-  // Reintento si pesa > 500KB
   if (blob.size > 500 * 1024) {
     return await compressImage(file, { maxWidth, maxHeight, quality: 0.6, type });
   }
 
-  // Crear File webp con nombre único
   const fileName = `${crypto.randomUUID?.() || Date.now()}.webp`;
   const webpFile = new File([blob], fileName, { type });
 
@@ -107,15 +98,12 @@ async function compressImage(
 /** Sube un File al bucket y devuelve la public URL */
 async function uploadToBucket(file, bucket = 'client_photos') {
   const fileName = file?.name ?? `${crypto.randomUUID?.() || Date.now()}.webp`;
-  const filePath = fileName; // raíz del bucket
-  const { error } = await supabase
-    .storage
-    .from(bucket)
-    .upload(filePath, file, {
-      cacheControl: '3600',
-      upsert: false,
-      contentType: file.type || 'image/webp'
-    });
+  const filePath = fileName;
+  const { error } = await supabase.storage.from(bucket).upload(filePath, file, {
+    cacheControl: '3600',
+    upsert: false,
+    contentType: file.type || 'image/webp',
+  });
   if (error) throw new Error(error.message);
   const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
   return data.publicUrl;
@@ -164,10 +152,7 @@ const checkAvalIneConflict = async ({ ineAval, currentClientId }) => {
   }
 
   if (data) {
-    return {
-      ok: false,
-      conflict: data,
-    };
+    return { ok: false, conflict: data };
   }
 
   return { ok: true };
@@ -222,10 +207,8 @@ const upsertAval = async ({ avalData, clientId }) => {
 };
 
 const resolvePhotoUrl = async ({ formFotoUrl, newPhotoFile, client }) => {
-  // Mantener por defecto lo que trae el form (preview o url existente)
   let fotoUrlFinal = formFotoUrl || null;
 
-  // Caso A: el usuario quitó la foto en UI
   const userClearedPhoto = !formFotoUrl && client?.foto_url;
   if (userClearedPhoto) {
     try {
@@ -236,7 +219,6 @@ const resolvePhotoUrl = async ({ formFotoUrl, newPhotoFile, client }) => {
     fotoUrlFinal = null;
   }
 
-  // Caso B: el usuario seleccionó una nueva foto
   if (newPhotoFile) {
     const uploadedUrl = await uploadToBucket(newPhotoFile, 'client_photos');
 
@@ -269,11 +251,7 @@ const PhotoPicker = ({ valueUrl, onChange, onClear, disabled }) => {
     if (!file) return;
 
     if (file.size > 12 * 1024 * 1024) {
-      toast({
-        variant: 'destructive',
-        title: 'Archivo demasiado grande',
-        description: 'Máximo 12MB.'
-      });
+      toast({ variant: 'destructive', title: 'Archivo demasiado grande', description: 'Máximo 12MB.' });
       resetInput();
       return;
     }
@@ -283,11 +261,7 @@ const PhotoPicker = ({ valueUrl, onChange, onClear, disabled }) => {
       onChange?.({ file: compressed, previewUrl: dataUrl });
     } catch (err) {
       console.error(err);
-      toast({
-        variant: 'destructive',
-        title: 'Error con la imagen',
-        description: 'No se pudo procesar la foto.'
-      });
+      toast({ variant: 'destructive', title: 'Error con la imagen', description: 'No se pudo procesar la foto.' });
     } finally {
       resetInput();
     }
@@ -312,21 +286,11 @@ const PhotoPicker = ({ valueUrl, onChange, onClear, disabled }) => {
         />
       </div>
       <div className="flex gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => inputRef.current?.click()}
-          disabled={disabled}
-        >
+        <Button type="button" variant="outline" onClick={() => inputRef.current?.click()} disabled={disabled}>
           {valueUrl ? 'Reemplazar foto' : 'Añadir foto'}
         </Button>
         {valueUrl && (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={onClear}
-            disabled={disabled}
-          >
+          <Button type="button" variant="ghost" onClick={onClear} disabled={disabled}>
             <Trash2 className="h-4 w-4 mr-1" />
             Quitar
           </Button>
@@ -335,6 +299,29 @@ const PhotoPicker = ({ valueUrl, onChange, onClear, disabled }) => {
     </div>
   );
 };
+
+/* ============================
+   Helpers Garantías
+============================ */
+const normalizeGuaranteeRow = (g) => ({
+  id: g?.id ?? null,
+  client_id: g?.client_id ?? null,
+  descripcion: g?.descripcion ?? '',
+  marca: g?.marca ?? '',
+  modelo: g?.modelo ?? '',
+  no_serie: g?.no_serie ?? '',
+});
+
+const buildGuaranteePayload = (row, clientId) => ({
+  client_id: clientId,
+  descripcion: row.descripcion?.trim() || null,
+  marca: row.marca?.trim() || null,
+  modelo: row.modelo?.trim() || null,
+  no_serie: row.no_serie?.trim() || null,
+});
+
+const guaranteeHasAnyInfo = (row) =>
+  Boolean(row.descripcion?.trim() || row.marca?.trim() || row.modelo?.trim() || row.no_serie?.trim());
 
 /* ============================
    Form principal
@@ -357,11 +344,10 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
     foto_url: '',
   });
 
-  // archivo nuevo (comprimido) y preview al editar
   const [newPhotoFile, setNewPhotoFile] = useState(null);
 
   // ---------------------------
-  // Estado: Aval (edición en la misma ficha)
+  // Estado: Aval
   // ---------------------------
   const [avalData, setAvalData] = useState({
     id: null,
@@ -369,10 +355,19 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
     numero_ine: '',
     phone: '',
     address: '',
-    email: ''
+    email: '',
   });
 
   const [loadingAval, setLoadingAval] = useState(false);
+
+  // ---------------------------
+  // Estado: Garantías (edición inline)
+  // ---------------------------
+  const [guarantees, setGuarantees] = useState([]);
+  const [loadingGuarantees, setLoadingGuarantees] = useState(false);
+  const [savingGuaranteeId, setSavingGuaranteeId] = useState(null);
+  const [deletingGuaranteeId, setDeletingGuaranteeId] = useState(null);
+
   const [submitting, setSubmitting] = useState(false);
 
   // Cargar valores de cliente
@@ -411,7 +406,7 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
     setNewPhotoFile(null);
   }, [client]);
 
-  // Si es edición, cargar el aval ligado al client.id
+  // Si es edición, cargar aval
   useEffect(() => {
     const fetchAval = async () => {
       if (!client?.id) {
@@ -450,6 +445,34 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
     if (client?.id) fetchAval();
   }, [client?.id]);
 
+  // Si es edición, cargar garantías
+  useEffect(() => {
+    const fetchGuarantees = async () => {
+      if (!client?.id) {
+        setGuarantees([]);
+        return;
+      }
+
+      setLoadingGuarantees(true);
+      const { data, error } = await supabase
+        .from('guarantees')
+        .select('id, client_id, descripcion, marca, modelo, no_serie')
+        .eq('client_id', client.id)
+        .order('id', { ascending: false });
+
+      if (error) {
+        console.error('Error cargando garantías:', error);
+        toast({ variant: 'destructive', title: 'No se pudieron cargar las garantías', description: 'Intenta nuevamente.' });
+        setGuarantees([]);
+      } else {
+        setGuarantees((data || []).map(normalizeGuaranteeRow));
+      }
+      setLoadingGuarantees(false);
+    };
+
+    fetchGuarantees();
+  }, [client?.id]);
+
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
@@ -475,18 +498,11 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
     const ineAval = (avalData.numero_ine || '').trim();
     if (!ineAval) return { ok: true };
 
-    const res = await checkAvalIneConflict({
-      ineAval,
-      currentClientId: client?.id,
-    });
+    const res = await checkAvalIneConflict({ ineAval, currentClientId: client?.id });
 
     if (!res.ok && res.error) {
       console.error('Error validando INE de aval:', res.error);
-      toast({
-        variant: 'destructive',
-        title: 'Error al validar aval',
-        description: 'No se pudo validar el INE del aval.',
-      });
+      toast({ variant: 'destructive', title: 'Error al validar aval', description: 'No se pudo validar el INE del aval.' });
       return { ok: false };
     }
 
@@ -502,6 +518,99 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
     return { ok: true };
   };
 
+  /* ============================
+     Garantías: handlers
+  ============================ */
+  const addGuaranteeRow = () => {
+    if (!client?.id) return;
+    setGuarantees((prev) => [
+      { id: `tmp_${crypto.randomUUID?.() || Date.now()}`, client_id: client.id, descripcion: '', marca: '', modelo: '', no_serie: '' },
+      ...prev,
+    ]);
+  };
+
+  const updateGuaranteeField = (rowId, field, value) => {
+    setGuarantees((prev) => prev.map((g) => (String(g.id) === String(rowId) ? { ...g, [field]: value } : g)));
+  };
+
+  const saveGuarantee = async (row) => {
+    if (!client?.id) return;
+
+    if (!guaranteeHasAnyInfo(row)) {
+      toast({ variant: 'destructive', title: 'Garantía vacía', description: 'Captura al menos una descripción o algún dato.' });
+      return;
+    }
+
+    setSavingGuaranteeId(row.id);
+    try {
+      const payload = buildGuaranteePayload(row, client.id);
+
+      // Si es temporal, INSERT; si no, UPSERT por id.
+      const isTemp = String(row.id).startsWith('tmp_');
+      if (isTemp) {
+        const createdBy = await getAuthUserId();
+        const { data, error } = await supabase
+          .from('guarantees')
+          .insert({ ...payload, created_by: createdBy })
+          .select('id, client_id, descripcion, marca, modelo, no_serie')
+          .single();
+
+        if (error) throw new Error(error.message);
+
+        setGuarantees((prev) =>
+          prev.map((g) => (String(g.id) === String(row.id) ? normalizeGuaranteeRow(data) : g))
+        );
+      } else {
+        const { data, error } = await supabase
+          .from('guarantees')
+          .update(payload)
+          .eq('id', row.id)
+          .select('id, client_id, descripcion, marca, modelo, no_serie')
+          .single();
+
+        if (error) throw new Error(error.message);
+
+        setGuarantees((prev) =>
+          prev.map((g) => (String(g.id) === String(row.id) ? normalizeGuaranteeRow(data) : g))
+        );
+      }
+
+      toast({ title: 'Garantía guardada' });
+    } catch (err) {
+      console.error(err);
+      toast({ variant: 'destructive', title: 'Error al guardar garantía', description: err.message });
+    } finally {
+      setSavingGuaranteeId(null);
+    }
+  };
+
+  const deleteGuarantee = async (row) => {
+    if (!client?.id) return;
+
+    const isTemp = String(row.id).startsWith('tmp_');
+    if (isTemp) {
+      setGuarantees((prev) => prev.filter((g) => String(g.id) !== String(row.id)));
+      return;
+    }
+
+    setDeletingGuaranteeId(row.id);
+    try {
+      const { error } = await supabase.from('guarantees').delete().eq('id', row.id);
+      if (error) throw new Error(error.message);
+
+      setGuarantees((prev) => prev.filter((g) => String(g.id) !== String(row.id)));
+      toast({ title: 'Garantía eliminada' });
+    } catch (err) {
+      console.error(err);
+      toast({ variant: 'destructive', title: 'Error al eliminar garantía', description: err.message });
+    } finally {
+      setDeletingGuaranteeId(null);
+    }
+  };
+
+  /* ============================
+     Submit principal (cliente + aval)
+  ============================ */
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (submitting) return;
@@ -514,28 +623,13 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
 
     setSubmitting(true);
     try {
-      // Validación INE del aval (no duplicado en otro cliente ACTIVO)
       const avalOk = await runAvalIneValidation();
       if (!avalOk.ok) return;
 
-      // 1) Foto
-      const fotoUrlFinal = await resolvePhotoUrl({
-        formFotoUrl: formData.foto_url,
-        newPhotoFile,
-        client,
-      });
+      const fotoUrlFinal = await resolvePhotoUrl({ formFotoUrl: formData.foto_url, newPhotoFile, client });
 
-      // 2) Cliente (tu flujo actual)
       await onSubmit(buildClientPayload(formData, fotoUrlFinal));
 
-      /*
-      // Si tu onSubmit NO guarda foto_url, descomenta este "Plan B":
-      if (client?.id) {
-        await supabase.from('clients').update({ foto_url: fotoUrlFinal }).eq('id', client.id);
-      }
-      */
-
-      // 3) Upsert aval
       if (client?.id) {
         const avalRes = await upsertAval({ avalData, clientId: client.id });
         if (!avalRes.ok) {
@@ -561,12 +655,10 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
   return (
     <form onSubmit={handleSubmit} className="text-sm md:text-base">
       <DialogHeader className="space-y-1">
-        <DialogTitle className="text-lg md:text-xl">
-          {client ? 'Editar Cliente' : 'Agregar Nuevo Cliente'}
-        </DialogTitle>
+        <DialogTitle className="text-lg md:text-xl">{client ? 'Editar Cliente' : 'Agregar Nuevo Cliente'}</DialogTitle>
         <DialogDescription className="text-xs md:text-sm">
           {client
-            ? 'Modifica la información del cliente y su aval (si aplica). Los datos del préstamo no se editan aquí.'
+            ? 'Modifica la información del cliente, su aval y sus garantías. Los datos del préstamo no se editan aquí.'
             : 'Este formulario es para capturar cliente; si vas a dar de alta con aval/garantías/préstamo usa "Alta Unificada".'}
         </DialogDescription>
       </DialogHeader>
@@ -635,12 +727,27 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
 
         <div className="md:col-span-2 space-y-2">
           <Label htmlFor="address">Dirección *</Label>
-          <Textarea id="address" name="address" value={formData.address} onChange={handleChange} required className="w-full min-h-24" />
+          <Textarea
+            id="address"
+            name="address"
+            value={formData.address}
+            onChange={handleChange}
+            required
+            className="w-full min-h-24"
+          />
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="poblacion">Población *</Label>
-          <Input id="poblacion" name="poblacion" value={formData.poblacion} onChange={handleChange} required maxLength={80} className="w-full" />
+          <Input
+            id="poblacion"
+            name="poblacion"
+            value={formData.poblacion}
+            onChange={handleChange}
+            required
+            maxLength={80}
+            className="w-full"
+          />
         </div>
 
         <div className="space-y-2">
@@ -689,7 +796,7 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
           />
         </div>
 
-        {/* -------- Aval en la misma ficha -------- */}
+        {/* -------- Aval -------- */}
         {client && (
           <>
             <div className="md:col-span-2 pt-4 border-t">
@@ -701,13 +808,7 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
 
             <div className="space-y-2">
               <Label htmlFor="aval_nombre">Nombre del Aval</Label>
-              <Input
-                id="aval_nombre"
-                name="nombre"
-                value={avalData.nombre}
-                onChange={handleAvalChange}
-                disabled={loadingAval}
-              />
+              <Input id="aval_nombre" name="nombre" value={avalData.nombre} onChange={handleAvalChange} disabled={loadingAval} />
             </div>
 
             <div className="space-y-2">
@@ -738,14 +839,7 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
 
             <div className="space-y-2">
               <Label htmlFor="aval_email">Correo del Aval</Label>
-              <Input
-                id="aval_email"
-                name="email"
-                type="email"
-                value={avalData.email}
-                onChange={handleAvalChange}
-                disabled={loadingAval}
-              />
+              <Input id="aval_email" name="email" type="email" value={avalData.email} onChange={handleAvalChange} disabled={loadingAval} />
             </div>
 
             <div className="md:col-span-2 space-y-2">
@@ -758,6 +852,103 @@ const ClientForm = ({ client, onSubmit, onCancel }) => {
                 className="min-h-20"
                 disabled={loadingAval}
               />
+            </div>
+
+            {/* -------- Garantías -------- */}
+            <div className="md:col-span-2 pt-4 border-t">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="font-medium text-muted-foreground">Garantías (editar aquí mismo)</p>
+                  <p className="text-xs text-muted-foreground">
+                    Puedes agregar, editar y eliminar garantías del cliente. (Marca/Modelo/Serie son opcionales.)
+                  </p>
+                </div>
+                <Button type="button" variant="outline" onClick={addGuaranteeRow} disabled={submitting || loadingGuarantees}>
+                  <PlusCircle className="h-4 w-4 mr-2" />
+                  Añadir garantía
+                </Button>
+              </div>
+
+              <div className="mt-3 space-y-3">
+                {loadingGuarantees ? (
+                  <div className="text-xs text-muted-foreground">Cargando garantías…</div>
+                ) : guarantees.length === 0 ? (
+                  <div className="text-xs text-muted-foreground">Este cliente no tiene garantías registradas.</div>
+                ) : (
+                  guarantees.map((g) => {
+                    const isSaving = String(savingGuaranteeId) === String(g.id);
+                    const isDeleting = String(deletingGuaranteeId) === String(g.id);
+
+                    return (
+                      <div key={g.id} className="p-3 border rounded-lg bg-slate-50 space-y-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="md:col-span-2 space-y-2">
+                            <Label>Descripción</Label>
+                            <Textarea
+                              value={g.descripcion}
+                              onChange={(e) => updateGuaranteeField(g.id, 'descripcion', e.target.value)}
+                              placeholder="Ej. Pantalla, moto, refri, etc."
+                              className="min-h-16"
+                              disabled={submitting || isSaving || isDeleting}
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>Marca</Label>
+                            <Input
+                              value={g.marca}
+                              onChange={(e) => updateGuaranteeField(g.id, 'marca', e.target.value)}
+                              placeholder="Ej. Samsung"
+                              disabled={submitting || isSaving || isDeleting}
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>Modelo</Label>
+                            <Input
+                              value={g.modelo}
+                              onChange={(e) => updateGuaranteeField(g.id, 'modelo', e.target.value)}
+                              placeholder="Ej. A10"
+                              disabled={submitting || isSaving || isDeleting}
+                            />
+                          </div>
+
+                          <div className="space-y-2 md:col-span-2">
+                            <Label>No. Serie</Label>
+                            <Input
+                              value={g.no_serie}
+                              onChange={(e) => updateGuaranteeField(g.id, 'no_serie', e.target.value)}
+                              placeholder="Ej. 123ABC..."
+                              disabled={submitting || isSaving || isDeleting}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            onClick={() => deleteGuarantee(g)}
+                            disabled={submitting || isSaving || isDeleting}
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Eliminar
+                          </Button>
+
+                          <Button
+                            type="button"
+                            onClick={() => saveGuarantee(g)}
+                            disabled={submitting || isSaving || isDeleting}
+                          >
+                            <Save className="h-4 w-4 mr-2" />
+                            {isSaving ? 'Guardando…' : 'Guardar'}
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </>
         )}

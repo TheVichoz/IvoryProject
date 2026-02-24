@@ -337,9 +337,9 @@ const insertGuaranteesRows = async ({ new_client_id, new_loan_id, guarantees, cr
   const guaranteesToSave = (guarantees || [])
     .filter((g) => Object.values(g).some((v) => v !== ''))
     .map((g) => ({
-      marca: g.marca || null,
-      modelo: g.modelo || null,
-      no_serie: g.no_serie || null,
+      marca: null,
+      modelo: null,
+      no_serie: null,
       descripcion: g.descripcion || null,
       client_id: new_client_id || null,
       loan_id: new_loan_id || null,
@@ -397,7 +397,10 @@ const maybeRegisterFirstPayment = async ({
     return;
   }
 
-  const newRemaining = Math.max(0, Number(loanNumbers.total || 0) - Number(payRow?.amount || firstPayment.amount || 0));
+  const newRemaining = Math.max(
+    0,
+    Number(loanNumbers.total || 0) - Number(payRow?.amount || firstPayment.amount || 0)
+  );
   const nextAfterFirst = addDaysISO(loanData.fecha, 14);
 
   const { error: rbErr } = await supabase
@@ -467,11 +470,11 @@ const AddClient = () => {
     email: '',
   });
 
-  // -------- 3) Garantías --------
+  // -------- 3) Garantías (SOLO DESCRIPCIÓN) --------
   const [guarantees, setGuarantees] = useState([
-    { marca: '', modelo: '', no_serie: '', descripcion: '' },
-    { marca: '', modelo: '', no_serie: '', descripcion: '' },
-    { marca: '', modelo: '', no_serie: '', descripcion: '' },
+    { descripcion: '' },
+    { descripcion: '' },
+    { descripcion: '' },
   ]);
 
   // -------- 4) Préstamo --------
@@ -576,18 +579,21 @@ const AddClient = () => {
     if (!/^\d{10}$/.test(clientData.phone)) newErrors.cliente_phone = 'Debe tener 10 dígitos';
     if (!clientData.direccion) newErrors.cliente_direccion = 'Requerido';
     if (!clientData.poblacion) newErrors.cliente_poblacion = 'Requerido';
-    if (!clientData.numero_ine || clientData.numero_ine.length < 13) newErrors.cliente_numero_ine = 'Mínimo 13 caracteres';
+    if (!clientData.numero_ine || clientData.numero_ine.length < 13)
+      newErrors.cliente_numero_ine = 'Mínimo 13 caracteres';
     if (!clientData.ruta) newErrors.cliente_ruta = 'Requerido';
     if (!clientData.grupo) newErrors.cliente_grupo = 'Requerido';
 
     if (!avalData.nombre) newErrors.aval_nombre = 'Requerido';
     if (!avalData.direccion) newErrors.aval_direccion = 'Requerido';
     if (!/^\d{10}$/.test(avalData.telefono)) newErrors.aval_telefono = 'Debe tener 10 dígitos';
-    if (!avalData.numero_ine || avalData.numero_ine.length < 13) newErrors.aval_numero_ine = 'Mínimo 13 caracteres';
+    if (!avalData.numero_ine || avalData.numero_ine.length < 13)
+      newErrors.aval_numero_ine = 'Mínimo 13 caracteres';
 
     guarantees.forEach((g, i) => {
       const isPartiallyFilled = Object.values(g).some((val) => val !== '');
-      if (isPartiallyFilled && !g.descripcion) newErrors[`guarantee_${i}_descripcion`] = 'Descripción requerida si la fila está en uso.';
+      if (isPartiallyFilled && !g.descripcion)
+        newErrors[`guarantee_${i}_descripcion`] = 'Descripción requerida si la fila está en uso.';
     });
 
     const amountNum = toAmountNum(loanData.monto);
@@ -761,31 +767,66 @@ const AddClient = () => {
               <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="cliente_nombre">Nombre *</Label>
-                  <Input id="cliente_nombre" name="nombre" value={clientData.nombre} onChange={handleClientChange} />
-                  {errors.cliente_nombre && <p className="text-sm text-destructive">{errors.cliente_nombre}</p>}
+                  <Input
+                    id="cliente_nombre"
+                    name="nombre"
+                    value={clientData.nombre}
+                    onChange={handleClientChange}
+                  />
+                  {errors.cliente_nombre && (
+                    <p className="text-sm text-destructive">{errors.cliente_nombre}</p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="cliente_email">Email</Label>
-                  <Input id="cliente_email" type="email" name="email" value={clientData.email} onChange={handleClientChange} />
+                  <Input
+                    id="cliente_email"
+                    type="email"
+                    name="email"
+                    value={clientData.email}
+                    onChange={handleClientChange}
+                  />
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="cliente_phone">Celular *</Label>
-                  <Input id="cliente_phone" name="phone" value={clientData.phone} onChange={handleClientChange} maxLength="10" />
-                  {errors.cliente_phone && <p className="text-sm text-destructive">{errors.cliente_phone}</p>}
+                  <Input
+                    id="cliente_phone"
+                    name="phone"
+                    value={clientData.phone}
+                    onChange={handleClientChange}
+                    maxLength="10"
+                  />
+                  {errors.cliente_phone && (
+                    <p className="text-sm text-destructive">{errors.cliente_phone}</p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="cliente_numero_ine">Número de INE *</Label>
-                  <Input id="cliente_numero_ine" name="numero_ine" value={clientData.numero_ine} onChange={handleClientChange} />
-                  {errors.cliente_numero_ine && <p className="text-sm text-destructive">{errors.cliente_numero_ine}</p>}
+                  <Input
+                    id="cliente_numero_ine"
+                    name="numero_ine"
+                    value={clientData.numero_ine}
+                    onChange={handleClientChange}
+                  />
+                  {errors.cliente_numero_ine && (
+                    <p className="text-sm text-destructive">{errors.cliente_numero_ine}</p>
+                  )}
                 </div>
 
                 <div className="sm:col-span-2 space-y-2">
                   <Label htmlFor="cliente_direccion">Dirección *</Label>
-                  <Textarea id="cliente_direccion" name="direccion" value={clientData.direccion} onChange={handleClientChange} />
-                  {errors.cliente_direccion && <p className="text-sm text-destructive">{errors.cliente_direccion}</p>}
+                  <Textarea
+                    id="cliente_direccion"
+                    name="direccion"
+                    value={clientData.direccion}
+                    onChange={handleClientChange}
+                  />
+                  {errors.cliente_direccion && (
+                    <p className="text-sm text-destructive">{errors.cliente_direccion}</p>
+                  )}
                 </div>
 
                 {/* Link en Maps (opcional) */}
@@ -813,25 +854,47 @@ const AddClient = () => {
                       onChange={handleClientChange}
                       placeholder="Ej. Cadereyta"
                     />
-                    {errors.cliente_poblacion && <p className="text-sm text-destructive">{errors.cliente_poblacion}</p>}
+                    {errors.cliente_poblacion && (
+                      <p className="text-sm text-destructive">{errors.cliente_poblacion}</p>
+                    )}
                   </div>
 
                   <div className="space-y-2 sm:col-span-1">
                     <Label htmlFor="cliente_ruta">Ruta *</Label>
-                    <Input id="cliente_ruta" name="ruta" value={clientData.ruta} onChange={handleClientChange} />
-                    {errors.cliente_ruta && <p className="text-sm text-destructive">{errors.cliente_ruta}</p>}
+                    <Input
+                      id="cliente_ruta"
+                      name="ruta"
+                      value={clientData.ruta}
+                      onChange={handleClientChange}
+                    />
+                    {errors.cliente_ruta && (
+                      <p className="text-sm text-destructive">{errors.cliente_ruta}</p>
+                    )}
                   </div>
 
                   <div className="space-y-2 sm:col-span-1">
                     <Label htmlFor="cliente_grupo">Grupo *</Label>
-                    <Input id="cliente_grupo" name="grupo" value={clientData.grupo} onChange={handleClientChange} />
-                    {errors.cliente_grupo && <p className="text-sm text-destructive">{errors.cliente_grupo}</p>}
+                    <Input
+                      id="cliente_grupo"
+                      name="grupo"
+                      value={clientData.grupo}
+                      onChange={handleClientChange}
+                    />
+                    {errors.cliente_grupo && (
+                      <p className="text-sm text-destructive">{errors.cliente_grupo}</p>
+                    )}
                   </div>
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="cliente_fecha_visita">Fecha de Registro *</Label>
-                  <Input id="cliente_fecha_visita" type="date" name="fecha_visita" value={clientData.fecha_visita} onChange={handleClientChange} />
+                  <Input
+                    id="cliente_fecha_visita"
+                    type="date"
+                    name="fecha_visita"
+                    value={clientData.fecha_visita}
+                    onChange={handleClientChange}
+                  />
                 </div>
               </div>
             </CardContent>
@@ -846,31 +909,66 @@ const AddClient = () => {
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <Label htmlFor="aval_nombre">Nombre *</Label>
-                <Input id="aval_nombre" name="nombre" value={avalData.nombre} onChange={handleAvalChange} />
-                {errors.aval_nombre && <p className="text-sm text-destructive">{errors.aval_nombre}</p>}
+                <Input
+                  id="aval_nombre"
+                  name="nombre"
+                  value={avalData.nombre}
+                  onChange={handleAvalChange}
+                />
+                {errors.aval_nombre && (
+                  <p className="text-sm text-destructive">{errors.aval_nombre}</p>
+                )}
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="aval_telefono">Teléfono *</Label>
-                <Input id="aval_telefono" name="telefono" value={avalData.telefono} onChange={handleAvalChange} maxLength="10" />
-                {errors.aval_telefono && <p className="text-sm text-destructive">{errors.aval_telefono}</p>}
+                <Input
+                  id="aval_telefono"
+                  name="telefono"
+                  value={avalData.telefono}
+                  onChange={handleAvalChange}
+                  maxLength="10"
+                />
+                {errors.aval_telefono && (
+                  <p className="text-sm text-destructive">{errors.aval_telefono}</p>
+                )}
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="aval_email">Email (Opcional)</Label>
-                <Input id="aval_email" name="email" type="email" value={avalData.email} onChange={handleAvalChange} />
+                <Input
+                  id="aval_email"
+                  name="email"
+                  type="email"
+                  value={avalData.email}
+                  onChange={handleAvalChange}
+                />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="aval_numero_ine">Número de INE *</Label>
-                <Input id="aval_numero_ine" name="numero_ine" value={avalData.numero_ine} onChange={handleAvalChange} />
-                {errors.aval_numero_ine && <p className="text-sm text-destructive">{errors.aval_numero_ine}</p>}
+                <Input
+                  id="aval_numero_ine"
+                  name="numero_ine"
+                  value={avalData.numero_ine}
+                  onChange={handleAvalChange}
+                />
+                {errors.aval_numero_ine && (
+                  <p className="text-sm text-destructive">{errors.aval_numero_ine}</p>
+                )}
               </div>
 
               <div className="md:col-span-2 space-y-2">
                 <Label htmlFor="aval_direccion">Dirección *</Label>
-                <Textarea id="aval_direccion" name="direccion" value={avalData.direccion} onChange={handleAvalChange} />
-                {errors.aval_direccion && <p className="text-sm text-destructive">{errors.aval_direccion}</p>}
+                <Textarea
+                  id="aval_direccion"
+                  name="direccion"
+                  value={avalData.direccion}
+                  onChange={handleAvalChange}
+                />
+                {errors.aval_direccion && (
+                  <p className="text-sm text-destructive">{errors.aval_direccion}</p>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -887,13 +985,12 @@ const AddClient = () => {
                 <div key={i} className="p-4 border rounded-lg space-y-4">
                   <p className="font-medium">Garantía {i + 1}</p>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <Input placeholder="Marca" name="marca" value={g.marca} onChange={(e) => handleGuaranteeChange(i, e)} />
-                    <Input placeholder="Modelo" name="modelo" value={g.modelo} onChange={(e) => handleGuaranteeChange(i, e)} />
-                    <Input placeholder="No. de serie" name="no_serie" value={g.no_serie} onChange={(e) => handleGuaranteeChange(i, e)} />
-                  </div>
-
-                  <Textarea placeholder="Descripción *" name="descripcion" value={g.descripcion} onChange={(e) => handleGuaranteeChange(i, e)} />
+                  <Textarea
+                    placeholder="Descripción *"
+                    name="descripcion"
+                    value={g.descripcion}
+                    onChange={(e) => handleGuaranteeChange(i, e)}
+                  />
 
                   {errors[`guarantee_${i}_descripcion`] && (
                     <p className="text-sm text-destructive">{errors[`guarantee_${i}_descripcion`]}</p>
@@ -944,7 +1041,10 @@ const AddClient = () => {
 
               <div className="space-y-2">
                 <Label>Forma de Pago</Label>
-                <Select value={loanData.forma_pago} onValueChange={(v) => setLoanData((prev) => ({ ...prev, forma_pago: v }))}>
+                <Select
+                  value={loanData.forma_pago}
+                  onValueChange={(v) => setLoanData((prev) => ({ ...prev, forma_pago: v }))}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -1035,7 +1135,12 @@ const AddClient = () => {
 
           {/* Actions */}
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={() => navigate('/admin/clients')} disabled={isSubmitting}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate('/admin/clients')}
+              disabled={isSubmitting}
+            >
               Cancelar
             </Button>
             <Button type="submit" disabled={isSubmitting}>

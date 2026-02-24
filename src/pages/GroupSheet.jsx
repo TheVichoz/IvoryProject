@@ -138,7 +138,89 @@ function normalizeLoanRow(l) {
   };
 }
 
-const formatGuarantee = (g) => [g.marca, g.modelo].filter(Boolean).join(" ").trim();
+/* ==========================================================
+   ✅ GARANTÍAS: limpiar "SD" y vacíos, y mostrar bonito:
+   - NO mostrar "SD", "S/D", "Sin dato", etc.
+   - Si está vacío: NO regresa nada
+   - Preferencia:
+     1) Si hay descripción real => mostrar descripción
+     2) Si NO hay descripción => mostrar marca/modelo
+     3) Si hay serie real => agregar "Serie: xxx"
+   Salida ejemplo:
+     "Televisor — Serie: 123"
+     "Teléfono"
+========================================================== */
+const isPlaceholder = (v) => {
+  const s = toStr(v).toLowerCase();
+  return (
+    s === "" ||
+    s === "sd" ||
+    s === "s/d" ||
+    s === "sin dato" ||
+    s === "sin datos" ||
+    s === "sin descripcion" ||
+    s === "sin descripción" ||
+    s === "na" ||
+    s === "n/a" ||
+    s === "null" ||
+    s === "undefined" ||
+    s === "-"
+  );
+};
+
+const cleanField = (v) => {
+  const s = toStr(v);
+  return isPlaceholder(s) ? "" : s;
+};
+
+const cleanTokenSDInsideText = (text) => {
+  // Quita "SD" como token suelto dentro de una descripción (ej. "SD - TV SANYO" -> "TV SANYO")
+  // Sin regex complejas para evitar backtracking.
+  const s = cleanField(text);
+  if (!s) return "";
+
+  const parts = s
+    .replaceAll("\r\n", "\n")
+    .replaceAll("\r", "\n")
+    .split(/\s+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  const filtered = parts.filter((x) => {
+    const t = x.toLowerCase();
+    return !(t === "sd" || t === "s/d");
+  });
+
+  return filtered.join(" ").trim();
+};
+
+const formatGuarantee = (g) => {
+  const descRaw = g?.descripcion;
+  const marcaRaw = g?.marca;
+  const modeloRaw = g?.modelo;
+  const serieRaw = g?.no_serie;
+
+  const desc = cleanTokenSDInsideText(descRaw);
+  const marca = cleanTokenSDInsideText(marcaRaw);
+  const modelo = cleanTokenSDInsideText(modeloRaw);
+  const serie = cleanTokenSDInsideText(serieRaw);
+
+  const mm = [marca, modelo].filter(Boolean).join(" ").trim();
+
+  // Si todo vacío => nada
+  if (!desc && !mm && !serie) return "";
+
+  // Base: descripción si existe, si no marca/modelo
+  const base = desc || mm || "";
+
+  // Si hay serie, la agregamos. Si no hay base pero sí serie (raro), mostramos solo la serie
+  if (serie) {
+    if (base) return `${base} — Serie: ${serie}`;
+    return `Serie: ${serie}`;
+  }
+
+  return base;
+};
 
 /* ==============================
    Logo FINCEN desde assets
@@ -309,8 +391,9 @@ const fetchGuaranteesMap = async ({ clientIds, loansToShow }) => {
 
   const addG = (cid, g) => {
     if (!cid) return;
+
     const txt = formatGuarantee(g);
-    if (!txt) return;
+    if (!txt) return; // 👈 si está vacío, no agregamos nada
 
     if (!clientsSetMap[cid]) clientsSetMap[cid] = new Set();
     clientsSetMap[cid].add(txt);
@@ -342,7 +425,14 @@ const buildRowForLoan = ({ loan, idx, clientsById, avalesMap, guaranteesMap }) =
 
   const nl = normalizeLoanRow(loan);
   const aval = avalesMap[c.id] || "";
-  const garantias = guaranteesMap[c.id] ? Array.from(guaranteesMap[c.id]).join(" • ") : "";
+
+  // guaranteesMap[c.id] aquí puede ser Set() o array, lo normalizamos
+  let garantias = "";
+  const gSet = guaranteesMap[c.id];
+  if (gSet) {
+    const arr = Array.isArray(gSet) ? gSet : Array.from(gSet);
+    garantias = arr.filter(Boolean).join(" • ");
+  }
 
   const clientPhone = c.phone ?? c.telefono ?? "";
   const dirCliente = joinLines(c.address ?? c.direccion ?? "", clientPhone && `Tel. ${clientPhone}`);
@@ -1020,8 +1110,15 @@ function GuaranteesList({ text }) {
     .map((x) => toStr(x))
     .filter(Boolean);
 
+  // Por si acaso: filtrar placeholders tipo SD que se cuelen aquí
+  const clean = raw
+    .map((x) => cleanTokenSDInsideText(x))
+    .filter((x) => !isPlaceholder(x) && Boolean(x));
+
+  if (!clean.length) return null;
+
   const counts = new Map();
-  const items = raw.map((g) => {
+  const items = clean.map((g) => {
     const base = keyFromText(g) || "k-empty";
     const n = (counts.get(base) || 0) + 1;
     counts.set(base, n);

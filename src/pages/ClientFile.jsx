@@ -295,9 +295,7 @@ const PreviewEditedTotals = ({ amount, rate, weeks, alreadyPaid }) => {
         </div>
       </div>
       {willComplete && (
-        <div className="mt-2 text-emerald-700 font-medium">
-          Con este cambio, el préstamo quedará liquidado (completed).
-        </div>
+        <div className="mt-2 text-emerald-700 font-medium">Con este cambio, el préstamo quedará liquidado (completed).</div>
       )}
     </div>
   );
@@ -324,18 +322,8 @@ const ClientFile = () => {
   const { clientId } = useParams();
   const navigate = useNavigate();
 
-  const {
-    clients,
-    loans,
-    guarantees,
-    payments,
-    loading,
-    updateClient,
-    addLoan,
-    updateLoan,
-    addPayment,
-    refreshData,
-  } = useData();
+  const { clients, loans, guarantees, payments, loading, updateClient, addLoan, updateLoan, addPayment, refreshData } =
+    useData();
 
   const { isAdmin } = useAuth();
 
@@ -355,15 +343,9 @@ const ClientFile = () => {
   const [editAmount, setEditAmount] = useState('');
   const [editGrupo, setEditGrupo] = useState('');
 
-  const client = useMemo(
-    () => clients.find((c) => c.id.toString() === clientId),
-    [clients, clientId]
-  );
+  const client = useMemo(() => clients.find((c) => c.id.toString() === clientId), [clients, clientId]);
 
-  const clientLoans = useMemo(
-    () => loans.filter((l) => l.client_id?.toString() === clientId),
-    [loans, clientId]
-  );
+  const clientLoans = useMemo(() => loans.filter((l) => l.client_id?.toString() === clientId), [loans, clientId]);
 
   const clientGuarantees = useMemo(
     () => guarantees.filter((g) => g.client_id?.toString() === clientId),
@@ -748,7 +730,11 @@ const ClientFile = () => {
                       size="sm"
                       onClick={openRenewDialog}
                       disabled={!renewable}
-                      title={renewable ? 'Renovar préstamo (desde semana 10)' : 'Renovación disponible a partir de la semana 10'}
+                      title={
+                        renewable
+                          ? 'Renovar préstamo (desde semana 10)'
+                          : 'Renovación disponible a partir de la semana 10'
+                      }
                     >
                       <RefreshCw className="mr-2 h-4 w-4" />
                       Renovar
@@ -798,18 +784,36 @@ const ClientFile = () => {
                     <CardDescription>Garantías proporcionadas por este cliente.</CardDescription>
                   </div>
                 </CardHeader>
+
                 <CardContent className="space-y-4">
                   {clientGuarantees.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {clientGuarantees.map((guarantee) => (
-                        <div key={guarantee.id} className="p-4 border rounded-lg bg-slate-50">
-                          <p className="font-semibold text-slate-800">
-                            {guarantee.marca} {guarantee.modelo}
-                          </p>
-                          <p className="text-sm text-slate-500">No. Serie: {guarantee.no_serie || 'N/A'}</p>
-                          <p className="text-sm text-slate-600 mt-2">{guarantee.descripcion}</p>
-                        </div>
-                      ))}
+                      {clientGuarantees.map((guarantee) => {
+                        const marca = (guarantee.marca ?? '').trim();
+                        const modelo = (guarantee.modelo ?? '').trim();
+                        const serie = (guarantee.no_serie ?? '').trim();
+                        const desc = (guarantee.descripcion ?? '').trim();
+                        const hasFullInfo = Boolean(marca || modelo || serie);
+
+                        return (
+                          <div key={guarantee.id} className="p-4 border rounded-lg bg-slate-50">
+                            {!hasFullInfo ? (
+                              <>
+                                <p className="text-sm text-muted-foreground">Garantía</p>
+                                <p className="font-medium text-slate-800 mt-1">{desc || 'Sin descripción'}</p>
+                              </>
+                            ) : (
+                              <>
+                                <p className="font-semibold text-slate-800">
+                                  {[marca, modelo].filter(Boolean).join(' ') || 'Garantía'}
+                                </p>
+                                <p className="text-sm text-slate-500">No. Serie: {serie || 'N/A'}</p>
+                                {desc && <p className="text-sm text-slate-600 mt-2">{desc}</p>}
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="text-center py-8 text-muted-foreground">
@@ -827,7 +831,11 @@ const ClientFile = () => {
       {/* Modals */}
       <Dialog open={isEditingClient} onOpenChange={setIsEditingClient}>
         <DialogContent>
-          <ClientForm client={clientWithDerived} onSubmit={handleUpdateClient} onCancel={() => setIsEditingClient(false)} />
+          <ClientForm
+            client={clientWithDerived}
+            onSubmit={handleUpdateClient}
+            onCancel={() => setIsEditingClient(false)}
+          />
         </DialogContent>
       </Dialog>
 
@@ -907,7 +915,8 @@ const ClientFile = () => {
         <DialogContent className="max-w-md">
           <CardTitle className="mb-2">Editar préstamo</CardTitle>
           <p className="text-sm text-muted-foreground mb-4">
-            Puedes cambiar el <strong>monto</strong> y el <strong>grupo</strong>. Los importes derivados del monto se recalculan automáticamente.
+            Puedes cambiar el <strong>monto</strong> y el <strong>grupo</strong>. Los importes derivados del monto se
+            recalculan automáticamente.
           </p>
 
           <div className="space-y-3">
