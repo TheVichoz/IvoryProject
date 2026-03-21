@@ -2,7 +2,7 @@
 import React, { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { Helmet } from "react-helmet";
-import { BarChart3, TrendingUp, DollarSign, Users, Download, Filter } from "lucide-react";
+import { BarChart3, TrendingUp, DollarSign, Users, Download } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -10,39 +10,88 @@ import { useData } from "@/contexts/DataContext";
 import { toast } from "@/components/ui/use-toast";
 import PageHeader from "@/components/PageHeader";
 
-// utils
+// =========================
+// Utils base
+// =========================
 const toNum = (v) => (v == null || v === "" ? 0 : Number(v));
+const toStr = (v) => (v == null ? "" : String(v)).trim();
+
 const startOfDay = (d) => {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
   return x;
 };
+
 const startOfMonth = (d) => {
   const x = new Date(d);
   x.setDate(1);
   return startOfDay(x);
 };
+
 const startOfQuarter = (d) => {
   const x = new Date(d);
-  const qStartMonth = Math.floor(x.getMonth() / 3) * 3; // 0,3,6,9
+  const qStartMonth = Math.floor(x.getMonth() / 3) * 3;
   return startOfDay(new Date(x.getFullYear(), qStartMonth, 1));
 };
+
 const startOfWeek = (d) => {
   const x = new Date(d);
-  const dow = (x.getDay() + 6) % 7; // ISO week: Monday=0
+  const dow = (x.getDay() + 6) % 7;
   x.setDate(x.getDate() - dow);
   return startOfDay(x);
 };
+
 const addMonths = (d, n) => new Date(d.getFullYear(), d.getMonth() + n, 1);
 const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 const monthLabel = (d) =>
   ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"][d.getMonth()];
 
-// ===== helpers (mueven complejidad fuera del useMemo) =====
+// =========================
+// Helpers de fechas
+// =========================
 const loanDate = (l) => l?.start_date || l?.created_at;
 const paymentDate = (p) => p?.payment_date || p?.created_at;
 const clientDate = (c) => c?.created_at;
 
+// =========================
+// Helpers catálogos
+// =========================
+const uniqSorted = (arr) =>
+  Array.from(new Set((arr || []).map(toStr).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+
+const getPoblaciones = (clients) => uniqSorted((clients || []).map((c) => c?.poblacion));
+
+const getRutasByPoblacion = (clients, poblacion) => {
+  if (!poblacion) return [];
+  return uniqSorted((clients || []).filter((c) => toStr(c?.poblacion) === toStr(poblacion)).map((c) => c?.ruta));
+};
+
+const getGruposByPoblacionAndRuta = (clients, poblacion, ruta) => {
+  if (!poblacion) return [];
+
+  let source = (clients || []).filter((c) => toStr(c?.poblacion) === toStr(poblacion));
+
+  if (ruta) {
+    source = source.filter((c) => toStr(c?.ruta) === toStr(ruta));
+  }
+
+  return uniqSorted(source.map((c) => c?.grupo));
+};
+
+const matchesClientFilters = ({ client, poblacion, ruta, grupo }) => {
+  if (!client) return false;
+  if (!poblacion) return true;
+
+  if (toStr(client?.poblacion) !== toStr(poblacion)) return false;
+  if (ruta && toStr(client?.ruta) !== toStr(ruta)) return false;
+  if (grupo && toStr(client?.grupo) !== toStr(grupo)) return false;
+
+  return true;
+};
+
+// =========================
+// Helpers reportes
+// =========================
 const buildMonthlyBuckets = ({ now, monthsBack = 5 }) => {
   const buckets = [];
   const base = startOfMonth(now);
@@ -65,13 +114,16 @@ const buildMonthlyBuckets = ({ now, monthsBack = 5 }) => {
 
 const buildBucketIndex = (buckets) => {
   const map = new Map();
-  for (const b of buckets) map.set(`${b.y}-${b.m}`, b);
+  for (const b of buckets) {
+    map.set(`${b.y}-${b.m}`, b);
+  }
   return map;
 };
 
 const addLoanToBuckets = ({ bucketsIndex, loan }) => {
   const ds = loanDate(loan);
   if (!ds) return;
+
   const d = new Date(ds);
   const b = bucketsIndex.get(`${d.getFullYear()}-${d.getMonth()}`);
   if (b) b.loans += 1;
@@ -80,6 +132,7 @@ const addLoanToBuckets = ({ bucketsIndex, loan }) => {
 const addPaymentToBuckets = ({ bucketsIndex, payment }) => {
   const ds = paymentDate(payment);
   if (!ds) return;
+
   const d = new Date(ds);
   const b = bucketsIndex.get(`${d.getFullYear()}-${d.getMonth()}`);
   if (b) b.payments += toNum(payment.amount);
@@ -88,6 +141,7 @@ const addPaymentToBuckets = ({ bucketsIndex, payment }) => {
 const addClientToBuckets = ({ bucketsIndex, client }) => {
   const ds = clientDate(client);
   if (!ds) return;
+
   const d = new Date(ds);
   const b = bucketsIndex.get(`${d.getFullYear()}-${d.getMonth()}`);
   if (b) b.clients += 1;
@@ -100,6 +154,7 @@ const getFromDateByPeriod = (period, now) => {
     quarter: () => startOfQuarter(now),
     year: () => startOfDay(new Date(now.getFullYear(), 0, 1)),
   };
+
   const fn = map[period] || map.month;
   return fn();
 };
@@ -107,11 +162,68 @@ const getFromDateByPeriod = (period, now) => {
 const calcMonthlyMaxLoans = (monthlyData) =>
   monthlyData.reduce((mx, x) => Math.max(mx, x.loans || 0), 0);
 
+const colorForLoanStatus = (s) =>
+  s === "active"
+    ? "bg-secondary"
+    : s === "completed"
+    ? "bg-primary"
+    : s === "overdue"
+    ? "bg-destructive"
+    : "bg-muted";
+
+const colorForPaymentStatus = (s) =>
+  s === "paid"
+    ? "bg-secondary"
+    : s === "pending"
+    ? "bg-yellow-500"
+    : s === "overdue"
+    ? "bg-destructive"
+    : "bg-muted";
+
 export default function Reports() {
   const { clients = [], loans = [], payments = [] } = useData();
-  const [selectedPeriod, setSelectedPeriod] = useState("month"); // week | month | quarter | year
 
-  // ====== Periodo seleccionado (rango desde...hasta hoy) ======
+  const [selectedPeriod, setSelectedPeriod] = useState("month");
+  const [selectedPoblacion, setSelectedPoblacion] = useState("");
+  const [selectedRuta, setSelectedRuta] = useState("");
+  const [selectedGrupo, setSelectedGrupo] = useState("");
+
+  // =========================
+  // Catálogos de filtros
+  // =========================
+  const poblaciones = useMemo(() => getPoblaciones(clients), [clients]);
+
+  const rutas = useMemo(
+    () => getRutasByPoblacion(clients, selectedPoblacion),
+    [clients, selectedPoblacion]
+  );
+
+  const grupos = useMemo(
+    () => getGruposByPoblacionAndRuta(clients, selectedPoblacion, selectedRuta),
+    [clients, selectedPoblacion, selectedRuta]
+  );
+
+  // =========================
+  // Normalizar dependencias entre filtros
+  // =========================
+  const handlePoblacionChange = (value) => {
+    setSelectedPoblacion(value);
+    setSelectedRuta("");
+    setSelectedGrupo("");
+  };
+
+  const handleRutaChange = (value) => {
+    setSelectedRuta(value);
+    setSelectedGrupo("");
+  };
+
+  const handleGrupoChange = (value) => {
+    setSelectedGrupo(value);
+  };
+
+  // =========================
+  // Periodo seleccionado
+  // =========================
   const { fromDate, toDate } = useMemo(() => {
     const now = new Date();
     const from = getFromDateByPeriod(selectedPeriod, now);
@@ -124,107 +236,145 @@ export default function Reports() {
     return t >= fromDate && t <= toDate;
   };
 
-  // ====== Filtrados por periodo ======
-  const loansInPeriod = useMemo(() => loans.filter((l) => inRange(loanDate(l))), [loans, fromDate, toDate]);
-  const paymentsInPeriod = useMemo(
-    () => payments.filter((p) => inRange(paymentDate(p))),
-    [payments, fromDate, toDate]
-  );
-  const clientsInPeriod = useMemo(() => clients.filter((c) => inRange(clientDate(c))), [clients, fromDate, toDate]);
+  // =========================
+  // Clientes filtrados por población/ruta/grupo
+  // =========================
+  const filteredClients = useMemo(() => {
+    return clients.filter((client) =>
+      matchesClientFilters({
+        client,
+        poblacion: selectedPoblacion,
+        ruta: selectedRuta,
+        grupo: selectedGrupo,
+      })
+    );
+  }, [clients, selectedPoblacion, selectedRuta, selectedGrupo]);
 
-  // ====== KPIs ======
+  const filteredClientIds = useMemo(
+    () => new Set(filteredClients.map((c) => c.id)),
+    [filteredClients]
+  );
+
+  // =========================
+  // Loans / payments filtrados por cliente
+  // =========================
+  const filteredLoans = useMemo(
+    () => loans.filter((l) => filteredClientIds.has(l.client_id)),
+    [loans, filteredClientIds]
+  );
+
+  const filteredPayments = useMemo(() => {
+    const filteredLoanIds = new Set(filteredLoans.map((l) => l.id));
+    return payments.filter((p) => filteredLoanIds.has(p.loan_id));
+  }, [payments, filteredLoans]);
+
+  // =========================
+  // Filtrados por periodo
+  // =========================
+  const loansInPeriod = useMemo(
+    () => filteredLoans.filter((l) => inRange(loanDate(l))),
+    [filteredLoans, fromDate, toDate]
+  );
+
+  const paymentsInPeriod = useMemo(
+    () => filteredPayments.filter((p) => inRange(paymentDate(p))),
+    [filteredPayments, fromDate, toDate]
+  );
+
+  const clientsInPeriod = useMemo(
+    () => filteredClients.filter((c) => inRange(clientDate(c))),
+    [filteredClients, fromDate, toDate]
+  );
+
+  // =========================
+  // KPIs
+  // =========================
   const stats = useMemo(() => {
     const totalLoaned = loansInPeriod.reduce((s, l) => s + toNum(l.amount), 0);
     const totalCollected = paymentsInPeriod.reduce((s, p) => s + toNum(p.amount), 0);
     const avgLoan = loansInPeriod.length ? totalLoaned / loansInPeriod.length : 0;
-
-    // ratio de cobranza: cobrado / prestado (del periodo). Si totalLoaned es 0, 0%.
     const collectionRate = totalLoaned > 0 ? (totalCollected / totalLoaned) * 100 : 0;
 
-    // clientes activos: según status en tabla clients
-    const activeClients = clients.filter((c) => (c.status || "").toLowerCase() === "active").length;
+    const activeClients = filteredClients.filter(
+      (c) => (c.status || "").toLowerCase() === "active"
+    ).length;
+
+    const activeLoans = filteredLoans.filter(
+      (l) => (l.status || "").toLowerCase() === "active"
+    ).length;
 
     return {
       totalClients: activeClients,
-      activeLoans: loans.filter((l) => (l.status || "").toLowerCase() === "active").length,
+      activeLoans,
       totalLoaned,
       totalCollected,
       averageLoanAmount: avgLoan,
       collectionRate,
+      newClientsInPeriod: clientsInPeriod.length,
     };
-  }, [loansInPeriod, paymentsInPeriod, clients, loans]);
+  }, [loansInPeriod, paymentsInPeriod, filteredClients, filteredLoans, clientsInPeriod]);
 
-  // ====== Serie mensual real (últimos 6 meses) ======
+  // =========================
+  // Serie mensual real (últimos 6 meses)
+  // =========================
   const monthlyData = useMemo(() => {
     const now = new Date();
     const buckets = buildMonthlyBuckets({ now, monthsBack: 5 });
     const bucketsIndex = buildBucketIndex(buckets);
 
-    for (const l of loans) addLoanToBuckets({ bucketsIndex, loan: l });
-    for (const p of payments) addPaymentToBuckets({ bucketsIndex, payment: p });
-    for (const c of clients) addClientToBuckets({ bucketsIndex, client: c });
+    for (const l of filteredLoans) addLoanToBuckets({ bucketsIndex, loan: l });
+    for (const p of filteredPayments) addPaymentToBuckets({ bucketsIndex, payment: p });
+    for (const c of filteredClients) addClientToBuckets({ bucketsIndex, client: c });
 
     return buckets;
-  }, [loans, payments, clients]);
+  }, [filteredLoans, filteredPayments, filteredClients]);
 
   const maxLoansInMonthly = useMemo(() => calcMonthlyMaxLoans(monthlyData), [monthlyData]);
 
-  // ====== Distribuciones por estado (en el periodo) ======
+  // =========================
+  // Distribuciones por estado
+  // =========================
   const loansByStatus = useMemo(() => {
     const map = new Map();
+
     for (const l of loansInPeriod) {
       const s = (l.status || l.estado_prestamo || "").toLowerCase() || "desconocido";
       map.set(s, (map.get(s) || 0) + 1);
     }
-    // Colores base
-    const colorFor = (s) =>
-      s === "active"
-        ? "bg-secondary"
-        : s === "completed"
-        ? "bg-primary"
-        : s === "overdue"
-        ? "bg-destructive"
-        : "bg-muted";
+
     return Array.from(map.entries()).map(([status, count]) => ({
       status: status.charAt(0).toUpperCase() + status.slice(1),
       count,
-      color: colorFor(status),
+      color: colorForLoanStatus(status),
     }));
   }, [loansInPeriod]);
 
   const paymentsByStatus = useMemo(() => {
     const map = new Map();
+
     for (const p of paymentsInPeriod) {
       const s = (p.status || "").toLowerCase() || "desconocido";
       map.set(s, (map.get(s) || 0) + 1);
     }
-    const colorFor = (s) =>
-      s === "paid"
-        ? "bg-secondary"
-        : s === "pending"
-        ? "bg-yellow-500"
-        : s === "overdue"
-        ? "bg-destructive"
-        : "bg-muted";
+
     return Array.from(map.entries()).map(([status, count]) => ({
       status: status.charAt(0).toUpperCase() + status.slice(1),
       count,
-      color: colorFor(status),
+      color: colorForPaymentStatus(status),
     }));
   }, [paymentsInPeriod]);
 
   const handleExportReport = () => {
     toast({
       title: "Exportar",
-      description: "Podemos exportar a CSV/Excel: dime en qué formato lo quieres y qué columnas incluir. 📄",
+      description: "Ya quedó lista la base para exportar respetando los filtros seleccionados.",
     });
   };
 
-  const handleFilterChange = () => {
-    toast({
-      title: "Filtros avanzados",
-      description: "Puedo agregar filtros por ruta, población, cliente y rango de fechas. Dime cuáles necesitas.",
-    });
+  const clearFilters = () => {
+    setSelectedPoblacion("");
+    setSelectedRuta("");
+    setSelectedGrupo("");
   };
 
   return (
@@ -248,17 +398,89 @@ export default function Reports() {
               </SelectContent>
             </Select>
 
-            <Button variant="outline" onClick={handleFilterChange}>
-              <Filter className="h-4 w-4 mr-2" />
-              Filtros
-            </Button>
-
             <Button onClick={handleExportReport}>
               <Download className="h-4 w-4 mr-2" />
               Exportar
             </Button>
           </div>
         </PageHeader>
+
+        {/* Filtros nuevos */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Filtros</CardTitle>
+            <CardDescription>
+              Primero población. Ruta es opcional. Grupo se ajusta según la selección.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div>
+                <label className="text-sm font-medium mb-2 block">Población</label>
+                <Select value={selectedPoblacion} onValueChange={handlePoblacionChange}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Seleccionar población" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {poblaciones.map((p) => (
+                      <SelectItem key={`pob-${p}`} value={p}>
+                        {p}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium mb-2 block">Ruta</label>
+                <Select
+                  value={selectedRuta || "all"}
+                  onValueChange={(value) => handleRutaChange(value === "all" ? "" : value)}
+                  disabled={!selectedPoblacion}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Todas" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas</SelectItem>
+                    {rutas.map((r) => (
+                      <SelectItem key={`ruta-${r}`} value={r}>
+                        {r}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium mb-2 block">Grupo</label>
+                <Select
+                  value={selectedGrupo || "all"}
+                  onValueChange={(value) => handleGrupoChange(value === "all" ? "" : value)}
+                  disabled={!selectedPoblacion}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos</SelectItem>
+                    {grupos.map((g) => (
+                      <SelectItem key={`grupo-${g}`} value={g}>
+                        {g}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex items-end">
+                <Button variant="outline" className="w-full" onClick={clearFilters}>
+                  Limpiar filtros
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* KPIs */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -312,7 +534,7 @@ export default function Reports() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-gradient">{stats.activeLoans}</div>
-                <p className="text-xs text-muted-foreground">en toda la cartera</p>
+                <p className="text-xs text-muted-foreground">según filtros seleccionados</p>
               </CardContent>
             </Card>
           </motion.div>
@@ -329,7 +551,7 @@ export default function Reports() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-orange-500">{stats.totalClients}</div>
-                <p className="text-xs text-muted-foreground">según estado del cliente</p>
+                <p className="text-xs text-muted-foreground">según filtros seleccionados</p>
               </CardContent>
             </Card>
           </motion.div>
