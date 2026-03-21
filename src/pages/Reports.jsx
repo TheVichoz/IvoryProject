@@ -22,10 +22,21 @@ const startOfDay = (d) => {
   return x;
 };
 
+const endOfDay = (d) => {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+};
+
 const startOfMonth = (d) => {
   const x = new Date(d);
   x.setDate(1);
   return startOfDay(x);
+};
+
+const endOfMonth = (d) => {
+  const x = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return endOfDay(x);
 };
 
 const startOfQuarter = (d) => {
@@ -39,6 +50,13 @@ const startOfWeek = (d) => {
   const dow = (x.getDay() + 6) % 7;
   x.setDate(x.getDate() - dow);
   return startOfDay(x);
+};
+
+const endOfWeek = (d) => {
+  const start = startOfWeek(d);
+  const x = new Date(start);
+  x.setDate(x.getDate() + 6);
+  return endOfDay(x);
 };
 
 const addMonths = (d, n) => new Date(d.getFullYear(), d.getMonth() + n, 1);
@@ -147,16 +165,57 @@ const addClientToBuckets = ({ bucketsIndex, client }) => {
   if (b) b.clients += 1;
 };
 
-const getFromDateByPeriod = (period, now) => {
-  const map = {
-    week: () => startOfWeek(now),
-    month: () => startOfMonth(now),
-    quarter: () => startOfQuarter(now),
-    year: () => startOfDay(new Date(now.getFullYear(), 0, 1)),
-  };
+const getDateRangeByPeriod = (period, now) => {
+  switch (period) {
+    case "week":
+      return {
+        fromDate: startOfWeek(now),
+        toDate: now,
+      };
 
-  const fn = map[period] || map.month;
-  return fn();
+    case "last_week": {
+      const currentWeekStart = startOfWeek(now);
+      const lastWeekStart = new Date(currentWeekStart);
+      lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+
+      return {
+        fromDate: startOfWeek(lastWeekStart),
+        toDate: endOfWeek(lastWeekStart),
+      };
+    }
+
+    case "month":
+      return {
+        fromDate: startOfMonth(now),
+        toDate: now,
+      };
+
+    case "last_month": {
+      const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      return {
+        fromDate: startOfMonth(lastMonthDate),
+        toDate: endOfMonth(lastMonthDate),
+      };
+    }
+
+    case "quarter":
+      return {
+        fromDate: startOfQuarter(now),
+        toDate: now,
+      };
+
+    case "year":
+      return {
+        fromDate: startOfDay(new Date(now.getFullYear(), 0, 1)),
+        toDate: now,
+      };
+
+    default:
+      return {
+        fromDate: startOfMonth(now),
+        toDate: now,
+      };
+  }
 };
 
 const calcMonthlyMaxLoans = (monthlyData) =>
@@ -226,8 +285,7 @@ export default function Reports() {
   // =========================
   const { fromDate, toDate } = useMemo(() => {
     const now = new Date();
-    const from = getFromDateByPeriod(selectedPeriod, now);
-    return { fromDate: from, toDate: now };
+    return getDateRangeByPeriod(selectedPeriod, now);
   }, [selectedPeriod]);
 
   const inRange = (dateStr) => {
@@ -392,7 +450,9 @@ export default function Reports() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="week">Esta Semana</SelectItem>
+                <SelectItem value="last_week">Semana Pasada</SelectItem>
                 <SelectItem value="month">Este Mes</SelectItem>
+                <SelectItem value="last_month">Mes Pasado</SelectItem>
                 <SelectItem value="quarter">Este Trimestre</SelectItem>
                 <SelectItem value="year">Este Año</SelectItem>
               </SelectContent>
@@ -405,7 +465,6 @@ export default function Reports() {
           </div>
         </PageHeader>
 
-        {/* Filtros nuevos */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Filtros</CardTitle>
@@ -482,7 +541,6 @@ export default function Reports() {
           </CardContent>
         </Card>
 
-        {/* KPIs */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -557,7 +615,6 @@ export default function Reports() {
           </motion.div>
         </div>
 
-        {/* Serie mensual & Distribuciones */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <motion.div
             initial={{ opacity: 0, x: -20 }}
